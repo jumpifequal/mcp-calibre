@@ -6,6 +6,10 @@ A read-only MCP server that gives Claude (and any MCP client) native access to a
 metadata, full-text search across EPUB/PDF/MOBI/LIT/…, chapter and page reading, highlights and notes.
 Transports: **stdio** (Claude Desktop, ChatGPT desktop app, Codex) and **Streamable HTTP** (Claude Code, Codex, other clients, remote use).
 
+![Architecture and technical overview of mcp-calibre](Architecture_and_Technical_Overview.png)
+
+*Architecture and technical overview.*
+
 ## Design
 
 | Aspect | Choice |

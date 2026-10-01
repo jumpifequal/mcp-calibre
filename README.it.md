@@ -6,6 +6,10 @@ Server MCP in sola lettura che dà a Claude (e a qualsiasi client MCP) accesso n
 locale: metadati, ricerca full-text su EPUB/PDF/MOBI/LIT/…, lettura per capitoli e pagine, highlight e note.
 Trasporti: **stdio** (Claude Desktop, app desktop ChatGPT, Codex) e **Streamable HTTP** (Claude Code, Codex, altri client, uso remoto).
 
+![Panoramica dell'architettura e degli aspetti tecnici di mcp-calibre](Architecture_and_Technical_Overview.png)
+
+*Panoramica dell'architettura e degli aspetti tecnici.*
+
 ## Design
 
 | Aspetto | Scelta |
