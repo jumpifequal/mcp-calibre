@@ -46,6 +46,13 @@
   .s { color: var(--fg2); margin-top: 2px; }
   .err { color: var(--color-text-danger, #b42318); font-size: 12.5px; margin-top: 10px; }
   .empty { color: var(--fg2); font-size: 13px; padding: 12px 2px; }
+  .bar { display: flex; gap: 6px; padding: 0 10px 10px; flex-wrap: wrap; }
+  button { font: inherit; font-size: 12px; padding: 4px 10px; border-radius: 6px; cursor: pointer;
+           background: var(--bg); color: var(--fg); border: 1px solid var(--line); }
+  button:hover { border-color: var(--fg2); }
+  button:disabled { opacity: .55; cursor: default; }
+  .st { font-size: 11.5px; color: var(--fg2); padding: 0 10px 10px; min-height: 0; }
+  .st:empty { display: none; }
   .zoom { position: fixed; inset: 0; background: rgba(0, 0, 0, .82); display: none; align-items: center;
           justify-content: center; padding: 16px; cursor: zoom-out; }
   .zoom.on { display: flex; }
@@ -65,6 +72,7 @@
   const PROTOCOL = "2026-01-26";
   const ALLOWED_MIME = new Set(["image/png", "image/jpeg"]);
   let nextId = 1;
+  let hostCaps = {};
   const pending = new Map();
   const parentWin = window.parent;
 
@@ -85,6 +93,79 @@
         if (/^--[a-z0-9-]+$/.test(k) && typeof v === "string" && v.length < 200) document.documentElement.style.setProperty(k, v);
       }
     }
+  }
+
+  // ---- PNG export helpers (no fetch: connect-src 'none' also blocks data: URLs)
+  function b64ToBytes(b64) {
+    const bin = atob(b64), out = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+    return out;
+  }
+  function pngBlob(it, img) {
+    if (it.mime === "image/png") return Promise.resolve(new Blob([b64ToBytes(it.data)], { type: "image/png" }));
+    return new Promise((resolve, reject) => {          // JPEG -> PNG through a canvas (data: images do not taint it)
+      const c = document.createElement("canvas");
+      c.width = img.naturalWidth; c.height = img.naturalHeight;
+      c.getContext("2d").drawImage(img, 0, 0);
+      c.toBlob(b => b ? resolve(b) : reject(new Error("PNG conversion failed")), "image/png");
+    });
+  }
+  function blobToB64(blob) {
+    return new Promise((resolve, reject) => {
+      const r = new FileReader();
+      r.onload = () => resolve(String(r.result).split(",", 2)[1]);
+      r.onerror = () => reject(r.error);
+      r.readAsDataURL(blob);
+    });
+  }
+  function safeName(n) {
+    const s = String(n || "image.png").replace(/[^A-Za-z0-9._-]+/g, "-").slice(0, 120);
+    return /\.png$/i.test(s) ? s : s + ".png";
+  }
+  async function copyPng(it, img, st) {
+    st.textContent = "";
+    try {
+      if (!navigator.clipboard || typeof ClipboardItem === "undefined") throw new Error("no Clipboard API");
+      await navigator.clipboard.write([new ClipboardItem({ "image/png": pngBlob(it, img) })]);
+      st.textContent = "Copied as PNG: paste it anywhere.";
+    } catch (e) {
+      // Fallback for hosts that deny the Clipboard API (e.g. opaque-origin sandboxes): copy the image as a
+      // selection. Office apps, Outlook and most editors paste it as an image.
+      if (copyBySelection(img)) st.textContent = "Copied: paste it into Word, PowerPoint, Outlook or an editor.";
+      else st.textContent = "This client blocks clipboard access from the gallery. Use Save PNG, or drag the image out.";
+    }
+    reportSize();
+  }
+  function copyBySelection(img) {
+    try {
+      const sel = window.getSelection(), range = document.createRange();
+      range.selectNode(img);
+      sel.removeAllRanges(); sel.addRange(range);
+      const ok = document.execCommand("copy");
+      sel.removeAllRanges();
+      return ok;
+    } catch (e) { return false; }
+  }
+  async function savePng(it, img, st) {
+    st.textContent = "";
+    const name = safeName(it.filename);
+    try {
+      const blob = await pngBlob(it, img);
+      if (hostCaps.downloadFile) {                      // preferred: the host saves the file (ui/download-file)
+        await request("ui/download-file", { contents: [{ type: "resource",
+          resource: { uri: "file:///" + name, mimeType: "image/png", blob: await blobToB64(blob) } }] });
+        st.textContent = "Saved " + name;
+      } else {                                          // fallback: native download from the frame
+        const a = document.createElement("a");
+        a.href = URL.createObjectURL(blob); a.download = name;
+        document.body.appendChild(a); a.click(); a.remove();
+        setTimeout(() => URL.revokeObjectURL(a.href), 30000);
+        st.textContent = "Download started (" + name + "). If nothing was saved, this client blocks downloads: use Copy PNG.";
+      }
+    } catch (e) {
+      st.textContent = "Save failed: " + (e && e.message ? e.message : "blocked by the client") + ". Try Copy PNG.";
+    }
+    reportSize();
   }
 
   function el(tag, cls, text) {
@@ -120,6 +201,15 @@
       cap.appendChild(el("div", "t", it.label || ""));
       if (it.sublabel) cap.appendChild(el("div", "s", it.sublabel));
       fig.appendChild(cap);
+      const bar = el("div", "bar"), st = el("div", "st");
+      const bCopy = el("button", null, "Copy PNG"), bSave = el("button", null, "Save PNG");
+      bCopy.type = bSave.type = "button";
+      bCopy.title = "Copy this image to the clipboard as PNG";
+      bSave.title = "Save this image as a PNG file";
+      bCopy.addEventListener("click", () => copyPng(it, img, st));
+      bSave.addEventListener("click", () => savePng(it, img, st));
+      bar.appendChild(bCopy); bar.appendChild(bSave);
+      fig.appendChild(bar); fig.appendChild(st);
       grid.appendChild(fig);
       shown++;
     }
@@ -177,6 +267,7 @@
     protocolVersion: PROTOCOL,
   }).then((res) => {
     applyHostContext(res && res.hostContext);
+    hostCaps = (res && res.hostCapabilities) || {};
     notify("ui/notifications/initialized", {});
     ready = true;
     reportSize();

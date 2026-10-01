@@ -237,7 +237,7 @@ All tools are read-only and accept an optional `library` argument when several l
 | `calibre_find_in_book` | Keyword-in-context search inside one book, paginated |
 | `calibre_get_toc` | EPUB TOC (nav/NCX → section indices) or PDF outline + page count |
 | `calibre_read_section` | One EPUB chapter or a PDF page range; `output="markdown"` keeps headings, lists, tables, code; image placeholders carry figure ids (`[image s3-2: alt]`) |
-| `calibre_show_images` | **Shows** covers and figures to the user inline in the chat (MCP Apps gallery); image data never enters the model's context |
+| `calibre_show_images` | **Shows** covers and figures to the user inline in the chat (MCP Apps gallery), with Copy PNG / Save PNG buttons; image data never enters the model's context |
 | `calibre_list_figures` | Figures of a book as a cheap text list: id, caption or alt text, chapter or page, size. EPUB, PDF, and other formats via a cached EPUB conversion |
 | `calibre_get_figure` | One figure as an image, resized; SVG rasterised |
 | `calibre_render_page` | A PDF page, or an area of it, as an image: for diagrams drawn as vectors, tables, formulas |
@@ -334,6 +334,16 @@ tool-call block, and the model cannot reuse them in files. `calibre_show_images`
 
 Example request to the assistant: "show me the covers of 1168 and 1164", or "show figure s3-2 of 1164".
 
+**Copying and saving.** Every image has two buttons, both producing a real PNG (JPEG sources are converted in
+the browser), with the server still writing nothing:
+
+| Button | How | Depends on the client |
+|---|---|---|
+| Copy PNG | Clipboard API (`image/png`); the gallery declares the spec's `clipboardWrite` permission | If the client denies clipboard access, it falls back to copying the image as a selection, which Word, PowerPoint, Outlook and most editors paste as an image |
+| Save PNG | Asks the client to save the file (`ui/download-file`), so the download goes through the client's own flow | Clients without that request use the frame's native download; if downloads are blocked too, the status line says so |
+
+Dragging an image out of the gallery into another application also works in most clients.
+
 **Client support.** MCP Apps is supported by Claude (web and desktop) and ChatGPT, among others. A client
 without it shows only the text summary: the summary tells the model to retry with `also_for_model=true`,
 which also attaches small thumbnails for the model (inside the tool block, costing image tokens) so it can
@@ -343,7 +353,7 @@ covers that case too.
 **Security of the view.** Captions and titles come from the books, so they are inserted as text, never as
 HTML; only PNG and JPEG data are rendered (SVG and anything else is dropped); the gallery accepts messages
 only from its parent frame and loads nothing external. These properties are tested in a real browser
-(`tests/test_gallery_browser.py`), including hostile captions and payloads.
+(`tests/test_gallery_browser.py`, `tests/test_gallery_copy_save.py`), including hostile captions and payloads.
 
 ## Semantic search model
 

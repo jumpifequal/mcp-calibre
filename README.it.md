@@ -240,7 +240,7 @@ Tutti i tool sono in sola lettura e accettano un argomento opzionale `library` q
 | `calibre_find_in_book` | Ricerca keyword-in-context dentro un singolo libro, paginata |
 | `calibre_get_toc` | Indice EPUB (nav/NCX → indici di sezione) o outline PDF + numero di pagine |
 | `calibre_read_section` | Un capitolo EPUB o un intervallo di pagine PDF; `output="markdown"` mantiene heading, liste, tabelle, codice; i segnaposto delle immagini riportano l'id della figura (`[image s3-2: alt]`) |
-| `calibre_show_images` | **Mostra** copertine e figure all'utente in linea nella chat (galleria MCP Apps); i dati delle immagini non entrano mai nel contesto del modello |
+| `calibre_show_images` | **Mostra** copertine e figure all'utente in linea nella chat (galleria MCP Apps), con pulsanti Copy PNG / Save PNG; i dati delle immagini non entrano mai nel contesto del modello |
 | `calibre_list_figures` | Figure di un libro come elenco testuale e leggero: id, didascalia o testo alternativo, capitolo o pagina, dimensioni. EPUB, PDF, e gli altri formati tramite una conversione EPUB in cache |
 | `calibre_get_figure` | Una figura come immagine, ridimensionata; gli SVG vengono rasterizzati |
 | `calibre_render_page` | Una pagina PDF, o una sua area, come immagine: per diagrammi vettoriali, tabelle, formule |
@@ -339,6 +339,16 @@ l'estensione ufficiale MCP Apps (SEP-1865):
 Esempio di richiesta all'assistente: "mostrami le copertine di 1168 e 1164", oppure "mostrami la figura s3-2
 di 1164".
 
+**Copiare e salvare.** Ogni immagine ha due pulsanti, che producono entrambi un vero PNG (le sorgenti JPEG
+vengono convertite nel browser), mentre il server continua a non scrivere nulla:
+
+| Pulsante | Come | Dipende dal client |
+|---|---|---|
+| Copy PNG | Clipboard API (`image/png`); la galleria dichiara il permesso `clipboardWrite` della specifica | Se il client nega l'accesso agli appunti, ripiega sulla copia dell'immagine come selezione, che Word, PowerPoint, Outlook e la maggior parte degli editor incollano come immagine |
+| Save PNG | Chiede al client di salvare il file (`ui/download-file`), quindi il download passa dal flusso del client | I client senza quella richiesta usano il download nativo del riquadro; se anche i download sono bloccati, la riga di stato lo segnala |
+
+Anche trascinare un'immagine fuori dalla galleria verso un'altra applicazione funziona nella maggior parte dei client.
+
 **Supporto dei client.** MCP Apps è supportato, tra gli altri, da Claude (web e desktop) e ChatGPT. Un client
 senza supporto mostra solo il riepilogo: il riepilogo indica al modello di riprovare con
 `also_for_model=true`, che allega anche piccole miniature per il modello (dentro il blocco del tool, con costo
@@ -348,7 +358,7 @@ Claude Desktop per Windows; il fallback copre anche quel caso.
 **Sicurezza della vista.** Didascalie e titoli provengono dai libri, quindi vengono inseriti come testo, mai
 come HTML; vengono visualizzati solo dati PNG e JPEG (SVG e qualunque altro formato vengono scartati); la
 galleria accetta messaggi solo dal riquadro padre e non carica nulla dall'esterno. Queste proprietà sono
-verificate in un browser reale (`tests/test_gallery_browser.py`), con didascalie e payload ostili.
+verificate in un browser reale (`tests/test_gallery_browser.py`, `tests/test_gallery_copy_save.py`), con didascalie e payload ostili.
 
 ## Modello per la ricerca semantica
 

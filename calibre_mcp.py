@@ -93,7 +93,7 @@ except ImportError:  # SDK v1
     from mcp.server.fastmcp.exceptions import ToolError  # type: ignore
 from mcp.types import CallToolResult, ImageContent, TextContent, ToolAnnotations
 
-__version__ = "4.2.0"
+__version__ = "4.3.0"
 
 # --------------------------------------------------------------------------- config
 FORMAT_PREF = ["EPUB", "KEPUB", "AZW3", "AZW", "MOBI", "FB2", "DOCX", "HTMLZ",
@@ -1672,13 +1672,21 @@ SHOW_MAX_ITEMS = 12
 SHOW_MAX_PAYLOAD = 8 * 1024 * 1024          # base64 sent to the view (never to the model)
 
 
+def _slug(text: str, n: int = 50) -> str:
+    return re.sub(r"[^a-z0-9]+", "-", fold(text or "").casefold()).strip("-")[:n].strip("-") or "book"
+
+
 class ImageRef(BaseModel):
     book_id: Annotated[int, Field(ge=1)]
     image: Annotated[str, Field(pattern=_IMAGE_REF, description="'cover' or a figure id (calibre_list_figures)")] = "cover"
     format: Annotated[Optional[str], Field(description="Source format for figures, e.g. EPUB or PDF")] = None
 
 
-@mcp.resource(GALLERY_URI, name="calibre_gallery", mime_type=GALLERY_MIME,
+# clipboardWrite: lets the gallery's "Copy PNG" button use the Clipboard API (hosts MAY grant it).
+GALLERY_META = {"ui": {"permissions": {"clipboardWrite": {}}, "prefersBorder": False}}
+
+
+@mcp.resource(GALLERY_URI, name="calibre_gallery", mime_type=GALLERY_MIME, meta=GALLERY_META,
               description="Inline gallery that shows Calibre covers and figures to the user")
 def resource_gallery() -> str:
     return (Path(__file__).resolve().parent / "mcpcalibre" / "ui" / "gallery.html").read_text("utf-8")
@@ -1694,7 +1702,8 @@ def calibre_show_images(
         "Also attach small thumbnails for YOU to see (costs image tokens). Default: user only"))] = False,
 ) -> CallToolResult:
     """SHOW book covers and figures to the USER, displayed prominently inline in the chat (MCP Apps
-    view), not hidden inside the folded tool call. The image data goes to the view only and costs
+    view), not hidden inside the folded tool call. Each image has Copy PNG / Save PNG buttons, so the
+    user can paste or save it (the server itself writes nothing). The image data goes to the view only and costs
     no model tokens; you receive a short text summary. Read-only. Hosts without MCP Apps support
     show only the summary: in that case use also_for_model=true and describe the images."""
     items, errors, payload = [], [], 0
@@ -1724,7 +1733,8 @@ def calibre_show_images(
                 cap = f and (f.get("caption") or f.get("alt"))
             sub = " · ".join(x for x in (sub, cap or f"figure {ref.image}") if x)
         items.append({"book_id": ref.book_id, "image": ref.image, "label": b.get("title"), "sublabel": sub,
-                      "mime": f"image/{fmt}", "data": b64, "alt": f"{b.get('title')} ({ref.image})"})
+                      "mime": f"image/{fmt}", "data": b64, "alt": f"{b.get('title')} ({ref.image})",
+                      "filename": f"{ref.book_id}-{_slug(b.get('title') or '')}-{ref.image}.png"})
         if also_for_model:
             small, sfmt = _image_bytes(ref.book_id, ref.image, 384, ref.format)
             model_imgs.append(ImageContent(type="image", data=base64.b64encode(small).decode("ascii"),
