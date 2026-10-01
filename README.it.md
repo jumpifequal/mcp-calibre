@@ -194,8 +194,8 @@ Tutti i tool sono in sola lettura e accettano un argomento opzionale `library` q
 | `calibre_get_annotations` | Highlight, note e bookmark del viewer di Calibre |
 | `calibre_get_notes` | Note di Calibre 7+ su autori, tag, serie, editori |
 | `calibre_get_cover` | Copertina come immagine, ridimensionata |
-| `calibre_similar_books` | Libri simili per metadati (i tag rari pesano di più) o per contenuto (embedding) |
-| `calibre_find_duplicates` | Probabili duplicati per titolo normalizzato, titolo+autore o ISBN |
+| `calibre_similar_books` | Libri simili: per metadati (i tag rari pesano di più), per contenuto (parole distintive del libro cercate nell'indice full-text, usato in automatico quando i metadati sono troppo scarni) o per embedding |
+| `calibre_find_duplicates` | Probabili duplicati per titolo, titolo+autore o ISBN. Prudente di default: ignora note di edizione e parentesi senza numeri, mantiene sottotitoli e parti numerate, non raggruppa mai numeri diversi della stessa serie. `loose=true` ignora anche i sottotitoli |
 | `calibre_list_libraries` | Librerie configurate |
 | `calibre_library_status` | Diagnostica: copertura FTS, sidecar e indice stemmed, indice semantico, funzioni attive |
 

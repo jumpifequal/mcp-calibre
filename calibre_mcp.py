@@ -91,7 +91,7 @@ except ImportError:  # SDK v1
     from mcp.server.fastmcp.exceptions import ToolError  # type: ignore
 from mcp.types import ToolAnnotations
 
-__version__ = "4.0.1"
+__version__ = "4.0.3"
 
 # --------------------------------------------------------------------------- config
 FORMAT_PREF = ["EPUB", "KEPUB", "AZW3", "AZW", "MOBI", "FB2", "DOCX", "HTMLZ",
@@ -523,7 +523,7 @@ class Library:
         self.lib_id = "_hex_-" + self.root.name.encode("utf-8").hex().upper()
         self.name = self.root.name
         self.notes_db = self.root / ".calnotes" / "notes.db"
-        self._cc_cache: tuple[float, dict[str, cql.CustomColumn]] = (0.0, {})
+        self._cc_cache: Optional[tuple[float, dict[str, cql.CustomColumn]]] = None  # (loaded_at, columns)
 
     # ---- preferences, custom columns, query language
     def prefs(self, key: str) -> Any:
@@ -539,7 +539,9 @@ class Library:
             return None
 
     def custom_columns(self) -> dict[str, cql.CustomColumn]:
-        if time.monotonic() - self._cc_cache[0] < 30:
+        # None sentinel, not a 0.0 timestamp: time.monotonic() counts from boot, so a fake "loaded at 0"
+        # would look fresh for the first 30 s after the machine starts (e.g. Claude Desktop at login).
+        if self._cc_cache is not None and time.monotonic() - self._cc_cache[0] < 30:
             return self._cc_cache[1]
         cols: dict[str, cql.CustomColumn] = {}
         with self.meta() as c:
@@ -908,6 +910,7 @@ class SideIndex:
                           f"tokenize='porter unicode61 remove_diacritics 2'{opts})")
                 c.execute("CREATE TABLE IF NOT EXISTS stem_state (rid INTEGER PRIMARY KEY)")
             self.has_stem = c.execute("SELECT 1 FROM sqlite_master WHERE name='fts_stem'").fetchone() is not None
+            c.execute("CREATE VIRTUAL TABLE IF NOT EXISTS fts_vocab USING fts5vocab(fts, row)")  # df per term
             c.execute("CREATE TABLE IF NOT EXISTS extracted (book INTEGER NOT NULL, fmt TEXT NOT NULL, "
                       "mtime REAL NOT NULL, size INTEGER NOT NULL, source TEXT NOT NULL, text TEXT NOT NULL, "
                       "PRIMARY KEY (book, fmt))")
@@ -1735,28 +1738,44 @@ def calibre_get_cover(book_id: Annotated[int, Field(ge=1)],
     return Image(data=data, format=fmt)
 
 
-_ARTICLES = re.compile(r"^(the|a|an|il|lo|la|i|gli|le|l|un|uno|una|der|die|das|le|les|el|los)\s+", re.I)
+_ARTICLES = re.compile(r"^(the|a|an|il|lo|la|i|gli|le|l|un|uno|una|der|die|das|les|el|los)\s+", re.I)
+_EDITION = re.compile(r"\b(edition|ed\.|edizione|revised|reprint|rev\.|\d+(st|nd|rd|th)|\d+a)\b", re.I)
 
 
-def _norm_title(t: str) -> str:
+def _norm_title(t: str, loose: bool = False) -> str:
+    """Strict (default): drop only edition notes and digit-free bracketed remarks such as
+    '(2nd edition)' or '(Biblioteca della Pleiade)'; keep subtitles and numbered parts like
+    '(1923-1926)' or ': La ragazza di fuoco', which usually tell volumes apart.
+    Loose: also drop subtitles and every bracketed part (more recall, more false positives)."""
     t = fold(t or "").casefold()
-    t = re.sub(r"[\(\[].*?[\)\]]", " ", t)          # drop "(2nd edition)" etc.
-    t = re.sub(r"[:\-–—].*$", "", t) if len(t) > 30 else t  # drop long subtitles
+
+    def bracket(m: re.Match) -> str:
+        inner = m.group(0)
+        if loose or _EDITION.search(inner) or not re.search(r"\d", inner):
+            return " "
+        return inner
+    t = re.sub(r"[\(\[][^\)\]]*[\)\]]", bracket, t)
+    if loose:
+        t = re.split(r"\s[:\-–—]\s|:\s", t, maxsplit=1)[0]
     t = re.sub(r"[^\w\s]", " ", t)
-    t = _ARTICLES.sub("", " ".join(t.split()))
-    return t
+    return _ARTICLES.sub("", " ".join(t.split()))
 
 
 @tool("calibre_find_duplicates")
 def calibre_find_duplicates(
     by: Annotated[Literal["title", "title_author", "isbn"], Field(description=(
-        "title: normalised title (case/accents/articles/edition notes ignored); title_author: plus first "
-        "author; isbn: same ISBN"))] = "title_author",
+        "title: normalised title; title_author: plus first author's surname; isbn: same ISBN"))] = "title_author",
+    loose: Annotated[bool, Field(description=(
+        "Also ignore subtitles and all bracketed parts (finds 'X' vs 'X: subtitle', but also "
+        "flags distinct volumes of a collection). Default strict."))] = False,
     limit: Annotated[int, Field(ge=1, le=200)] = 50,
 ) -> dict[str, Any]:
-    """Groups of probable duplicate books, largest groups first."""
+    """Groups of probable duplicate books, largest groups first. Volumes of the same series with
+    different series numbers are never grouped together."""
     groups: dict[str, list[int]] = {}
     with LIB.meta() as c:
+        series_of = {r[0]: (r[1], r[2]) for r in c.execute(
+            "SELECT l.book, l.series, b.series_index FROM books_series_link l JOIN books b ON b.id=l.book")}
         if by == "isbn":
             for book, val in c.execute("SELECT book, val FROM identifiers WHERE type='isbn'"):
                 key = re.sub(r"[^0-9Xx]", "", val or "").upper()
@@ -1767,32 +1786,49 @@ def calibre_find_duplicates(
                 "SELECT l.book, a.name FROM books_authors_link l JOIN authors a ON a.id=l.author "
                 "WHERE l.id IN (SELECT MIN(id) FROM books_authors_link GROUP BY book)"))
             for book, title in c.execute("SELECT id, title FROM books"):
-                key = _norm_title(title)
+                key = _norm_title(title, loose)
                 if not key:
                     continue
                 if by == "title_author":
-                    au = fold(first_author.get(book, "")).casefold().split()
-                    key += "|" + (au[-1] if au else "")
+                    au = re.findall(r"\w+", fold(first_author.get(book, "")).casefold())
+                    key += "|" + (max(au, key=len) if au else "")  # surname-ish, robust to "Cooper| Glenn"
                 groups.setdefault(key, []).append(book)
-    dup = sorted((g for g in groups.values() if len(set(g)) > 1), key=len, reverse=True)[:limit]
+    split: list[list[int]] = []
+    for g in groups.values():
+        # same series + different number = different volume: split those apart. A book outside any
+        # series can still duplicate one inside it, so it stays in the group when only one volume is involved.
+        vols: dict[tuple, list[int]] = {}
+        free = [b for b in g if b not in series_of]
+        for b in g:
+            if b in series_of:
+                vols.setdefault(series_of[b], []).append(b)
+        if len({v[0] for v in vols}) == len(vols) or len(vols) <= 1:  # no two numbers of one series
+            split.append(g)
+        else:
+            split += list(vols.values()) + [free]
+    dup = sorted((g for g in split if len(set(g)) > 1), key=len, reverse=True)[:limit]
     meta = {b["id"]: b for b in LIB.describe(sorted({i for g in dup for i in g}))}
-    return {"groups": len(dup), "duplicates": [
-        [{k: meta[i].get(k) for k in ("id", "title", "authors", "formats", "added")} for i in sorted(set(g))
-         if i in meta] for g in dup]}
+    return {"groups": len(dup), "mode": "loose" if loose else "strict", "duplicates": [
+        [{k: meta[i].get(k) for k in ("id", "title", "authors", "series", "formats", "added")}
+         for i in sorted(set(g)) if i in meta] for g in dup]}
 
 
 @tool("calibre_similar_books")
 def calibre_similar_books(
     book_id: Annotated[int, Field(ge=1)],
-    method: Annotated[Literal["auto", "metadata", "semantic"], Field(description=(
-        "metadata: shared authors/series/tags (rare tags weigh more); semantic: content similarity "
-        "(needs the embedding index); auto: semantic when available, else metadata"))] = "auto",
+    method: Annotated[Literal["auto", "metadata", "content", "semantic"], Field(description=(
+        "metadata: shared authors/series/tags (rare tags weigh more); content: distinctive words of the "
+        "book's text matched against the full-text index; semantic: embedding similarity (opt-in index); "
+        "auto: semantic if built, else metadata, falling back to content when metadata finds nothing"))] = "auto",
     limit: Annotated[int, Field(ge=1, le=50)] = 10,
 ) -> dict[str, Any]:
     """Books similar to a given one."""
     use_sem = method == "semantic" or (method == "auto" and LIB.semantic.exists())
+    used = "semantic" if use_sem else method if method != "auto" else "metadata"
     if use_sem:
         scored = _semantic_similar(book_id, limit)
+    elif method == "content":
+        scored = _content_similar(book_id, limit)
     else:
         with LIB.meta() as c:
             rows = c.execute("""
@@ -1810,11 +1846,62 @@ def calibre_similar_books(
                 ) WHERE book != :b GROUP BY book ORDER BY score DESC, book LIMIT :n""",
                 {"b": book_id, "n": limit}).fetchall()
         scored = [(r[0], r[1]) for r in rows]
+        if not scored and method == "auto":
+            scored, used = _content_similar(book_id, limit), "content"
     meta = {b["id"]: b for b in LIB.describe([b for b, _ in scored])}
-    return {"book_id": book_id, "method": "semantic" if use_sem else "metadata", "similar": [
+    return {"book_id": book_id, "method": used, "similar": [
         {"book_id": b, "score": round(sc, 3), "title": meta.get(b, {}).get("title"),
          "authors": meta.get(b, {}).get("authors"), "tags": meta.get(b, {}).get("tags")}
         for b, sc in scored if b in meta]}
+
+
+_STOP = set("""about above after again against also among another anything around because been before being
+below between both could does doing down during each either else enough even every from further have having
+here hers himself into itself just know like made make many more most much must myself never only other ours
+over same shall should since some such than that their theirs them then there these they this those through
+under until very well were what when where which while whom whose will with within without would your yours
+alla alle anche ancora avere aveva come con contro cosa così dalla dalle degli della delle dello dentro dopo
+dove ecco essere fare fino gli hanno loro molto nella nelle nello noi non ogni perché però poco poi prima
+quale quando quanto quella quelle quello questa queste questo sempre senza sono sopra sotto sulla sulle tanto
+tra tutti tutto una uno verso""".split())
+
+
+def _content_similar(book_id: int, limit: int, sample: int = 60000, n_terms: int = 20) -> list[tuple[int, float]]:
+    """'More like this' on the full-text index: tf-idf terms from the book's own text (plus title and
+    description), then a BM25 OR-query. No embeddings needed; works with sparse metadata."""
+    parts = []
+    with contextlib.suppress(ValueError):
+        parts.append(LIB.text_for(book_id)[0][:sample])
+    b = (LIB.describe([book_id], full=True) or [{}])[0]
+    parts += [b.get("title") or "", b.get("description") or ""]
+    words = re.findall(r"[^\W\d_]{4,}", fold(" ".join(parts)).casefold())
+    tf: dict[str, int] = {}
+    for w in words:
+        if w not in _STOP:
+            tf[w] = tf.get(w, 0) + 1
+    if not tf:
+        return []
+    cand = sorted(tf, key=tf.get, reverse=True)[:1500]
+    df: dict[str, int] = {}
+    with LIB.index.ro() as c:
+        n_docs = c.execute("SELECT COUNT(*) FROM state").fetchone()[0] or 1
+        # one 'term = ?' seek per word: fts5vocab answers equality from the index, while IN(...) makes it
+        # scan the whole vocabulary (seconds on a large library)
+        for t in cand:
+            r = c.execute("SELECT doc FROM fts_vocab WHERE term = ?", (t,)).fetchone()
+            if r:
+                df[t] = r[0]
+    import math
+    scored_terms = sorted(((tf[t] * math.log(n_docs / df[t]), t) for t in cand
+                           if t in df and 1 < df[t] < max(3, 0.25 * n_docs)), reverse=True)[:n_terms]
+    if not scored_terms:
+        return []
+    match = " OR ".join(f'"{t}"' for _, t in scored_terms)
+    best: dict[int, float] = {}
+    for bk, _fmt, sc in LIB.index.search(match, None, limit_rows=limit * 6 + 10):
+        if bk != book_id:
+            best[bk] = max(best.get(bk, 0.0), -sc)
+    return sorted(best.items(), key=lambda x: -x[1])[:limit]
 
 
 def _semantic_similar(book_id: int, limit: int) -> list[tuple[int, float]]:

@@ -193,8 +193,8 @@ All tools are read-only and accept an optional `library` argument when several l
 | `calibre_get_annotations` | Highlights, notes and bookmarks from the Calibre viewer |
 | `calibre_get_notes` | Calibre 7+ notes on authors, tags, series, publishers |
 | `calibre_get_cover` | Cover image, resized |
-| `calibre_similar_books` | Similar books by metadata (rare tags weigh more) or by content (embeddings) |
-| `calibre_find_duplicates` | Probable duplicates by normalised title, title+author, or ISBN |
+| `calibre_similar_books` | Similar books: by metadata (rare tags weigh more), by content (distinctive words of the book matched on the full-text index, used automatically when metadata is too sparse), or by embeddings |
+| `calibre_find_duplicates` | Probable duplicates by title, title+author or ISBN. Strict by default: ignores edition notes and digit-free bracketed remarks, keeps subtitles and numbered parts, never groups different numbers of one series. `loose=true` also ignores subtitles |
 | `calibre_list_libraries` | Configured libraries |
 | `calibre_library_status` | Diagnostics: FTS coverage, sidecar and stemmed index, semantic index, enabled features |
 

@@ -30,6 +30,14 @@ def err(fn, **kw):
     except Exception as e:  # noqa: BLE001
         return str(e)
 
+# --- regression: custom-column cache must not look "fresh" right after machine boot (monotonic ~ uptime)
+_real_mono = m.time.monotonic
+m.time.monotonic = lambda: 5.0
+m.set_libraries([here / "Calibre Library"], Path(os.environ["CALIBRE_MCP_DATA"]))
+check("custom columns visible right after boot", len(m.LIB.custom_columns()) == 9)
+m.time.monotonic = _real_mono
+m.set_libraries([here / "Calibre Library"], Path(os.environ["CALIBRE_MCP_DATA"]))
+
 # --- query language
 check("cql bare word", ids("sicurezza") == [1, 3], ids("sicurezza"))
 check("cql tag + not", ids("tag:security and not tag:malware") == [1, 3], ids("tag:security and not tag:malware"))
