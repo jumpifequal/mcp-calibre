@@ -104,7 +104,7 @@ powershell -ExecutionPolicy Bypass -File .\install.ps1 -Library "D:\Books\Calibr
 Poi riavvia completamente Claude Desktop (esci dall'icona nella tray, non basta chiudere la finestra).
 
 CLI: `python calibre_mcp.py --status` · `--sync` · `--extract-missing [--max-books N]` ·
-`--build-embeddings [--max-books N] [--rebuild]` · `--library <path>` · `--transport http` (vedi sotto) · `--gen-token`.
+`--build-embeddings [--max-books N] [--rebuild]` · `--download-model` · `--library <path>` · `--transport http` (vedi sotto) · `--gen-token`.
 
 ## Client OpenAI: app desktop ChatGPT, Codex CLI, estensione IDE di Codex
 
@@ -234,12 +234,15 @@ Tutti i tool sono in sola lettura e accettano un argomento opzionale `library` q
 |---|---|
 | `calibre_search_books` | Ricerca sui metadati: filtri strutturati più la **sintassi di ricerca di Calibre** in `query`, `virtual_library`, ordinamento (title, author, added, published, modified, rating, series), paginazione |
 | `calibre_search_fulltext` | Ricerca nel contenuto, BM25, insensibile agli accenti. Modalità `all`/`any`/`phrase`/`raw` (FTS5). `query_filter` / `virtual_library` restringono i candidati; `stemmed=true` trova le varianti delle parole. Gli snippet sono i passaggi che coprono le clausole più specifiche trovate (frasi, gruppi `NEAR`; i termini in `NOT` sono esclusi) e le elencano in `matched` |
-| `calibre_search_semantic` | Ricerca di passaggi per significato (indice di embedding opt-in) |
+| `calibre_search_semantic` | Ricerca di passaggi per significato (indice di embedding opt-in). Multilingue; `alt_queries` aggiunge parafrasi o traduzioni, fuse per passaggio |
 | `calibre_get_book` | Metadati completi, colonne custom, progresso di lettura, note su autori/serie/tag, formati, testo disponibile |
 | `calibre_read_text` | Finestra di testo per offset (opzionalmente centrata sull'offset di uno snippet) |
 | `calibre_find_in_book` | Ricerca keyword-in-context dentro un singolo libro, paginata |
 | `calibre_get_toc` | Indice EPUB (nav/NCX → indici di sezione) o outline PDF + numero di pagine |
-| `calibre_read_section` | Un capitolo EPUB o un intervallo di pagine PDF; `output="markdown"` mantiene heading, liste, tabelle, codice |
+| `calibre_read_section` | Un capitolo EPUB o un intervallo di pagine PDF; `output="markdown"` mantiene heading, liste, tabelle, codice; i segnaposto delle immagini riportano l'id della figura (`[image s3-2: alt]`) |
+| `calibre_list_figures` | Figure di un libro come elenco testuale e leggero: id, didascalia o testo alternativo, capitolo o pagina, dimensioni. EPUB, PDF, e gli altri formati tramite una conversione EPUB in cache |
+| `calibre_get_figure` | Una figura come immagine, ridimensionata; gli SVG vengono rasterizzati |
+| `calibre_render_page` | Una pagina PDF, o una sua area, come immagine: per diagrammi vettoriali, tabelle, formule |
 | `calibre_list_facets` | Autori/tag/serie/editori/lingue/formati con il numero di libri |
 | `calibre_list_custom_columns` | Le tue `#colonne`: tipo, multiplicità, copertura, valori più frequenti |
 | `calibre_list_virtual_libraries` | Virtual library e ricerche salvate con espressione e numero di libri |
@@ -292,30 +295,60 @@ quella predefinita. Ogni libreria ha il proprio indice sidecar.
 (`exploits` ↔ `exploitation`). Raddoppia circa lo spazio dell'indice e viene riempito in modo incrementale in
 background. Porter è uno stemmer **inglese**: non aiuta con il testo italiano.
 
-**Ricerca semantica.** Le dipendenze (`requirements-semantic.txt`: numpy + fastembed) vengono installate di default
-da `install.ps1` (escludibili con `-NoSemantic`; saltate in automatico con Python a 32 bit). L'indice è opt-in,
-pesante sulla CPU e mai costruito in automatico:
+**Ricerca semantica.** Dipendenze (`requirements-semantic.txt`: numpy + fastembed) e modello vengono installati da
+`install.ps1` (escludibili con `-NoSemantic`; saltati in automatico con Python a 32 bit): vedi
+[Modello per la ricerca semantica](#modello-per-la-ricerca-semantica). L'indice è opt-in, pesante sulla CPU (metà dei
+core di default, `CALIBRE_MCP_EMBED_THREADS`) e mai costruito in automatico:
 
 ```powershell
-.\.venv\Scripts\python.exe .\calibre_mcp.py --build-embeddings --max-books 50   # incrementale, riprendibile
+.venv\Scripts\python.exe calibre_mcp.py --build-embeddings --max-books 50   # incrementale, riprendibile
 ```
 
-Se il tool segnala dipendenze mancanti, installale **nel venv del server**, non nel Python di sistema (il messaggio
-d'errore stampa il comando esatto), poi riavvia il client MCP:
+Se un tool segnala dipendenze mancanti, installale **nel venv del server**, non nel Python di sistema (il messaggio
+d'errore stampa il comando esatto), poi riavvia il client MCP. Vengono indicizzati fino a 300 chunk per libro
+(campionati uniformemente), salvati in float16 in `embeddings.db`; la matrice viene caricata in memoria alla prima
+query semantica (circa 0,8 KB per chunk).
 
-```powershell
-.\.venv\Scripts\python.exe -m pip install -r requirements-semantic.txt
-```
+**Figure.** Prima `calibre_list_figures` (solo testo, costa poco), poi `calibre_get_figure` per quella che serve.
+Nei PDF, una didascalia senza immagine incorporata indica un disegno vettoriale: `calibre_render_page` con un
+`clip` attorno. Ogni immagine consuma token di visione, quindi niente viene inviato in blocco.
 
-Il modello predefinito è un MiniLM multilingue (italiano + inglese, 384 dimensioni, circa 220 MB), scaricato una
-volta da Hugging Face alla prima costruzione in `%LOCALAPPDATA%\calibre-mcp\models` (non nella cartella
-temporanea, così la pulizia disco non lo cancella). Costruisci l'indice prima da CLI: il download può durare più
-del timeout dei tool di un client. Dietro un proxy aziendale imposta `HTTPS_PROXY`. Gli embedding usano di default
-metà dei core (`CALIBRE_MCP_EMBED_THREADS`). Vengono indicizzati fino a 300 chunk per libro (campionati
-uniformemente), salvati in float16 in `embeddings.db`; la matrice viene caricata in memoria alla prima query
-semantica (circa 0,8 KB per chunk).
+**Lingue.** La ricerca full-text è lessicale: la query deve essere nella lingua dei libri (una query in italiano
+non trova testo inglese). Le instructions del server dicono al modello di tradurre la query, o di mettere in OR
+le traduzioni per le librerie miste. La ricerca semantica è multilingue (una domanda in italiano trova anche
+passaggi in inglese); il modello può passare la traduzione inglese in `alt_queries` per aumentare il recall. Lo
+stemming è solo inglese, e tradurre la query non cambia nulla per i libri in italiano.
 
 **Markdown per le pagine PDF.** `pip install pymupdf4llm` (AGPL-3.0). Il Markdown per gli EPUB è integrato.
+
+## Modello per la ricerca semantica
+
+La ricerca semantica usa **`sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2`**, un modello di
+sentence embedding addestrato a collocare frasi in **oltre 50 lingue, italiano incluso, nello stesso spazio
+vettoriale**: una domanda in italiano e un passaggio in inglese che dicono la stessa cosa finiscono vicini. Puoi
+quindi chiedere in italiano e trovare passaggi in libri inglesi, o il contrario, senza alcuna traduzione. (La
+ricerca full-text lessicale è diversa: lì la query deve essere nella lingua dei libri, vedi
+[Funzioni opzionali](#funzioni-opzionali).)
+
+| | |
+|---|---|
+| Dimensione | circa 220 MB, vettori a 384 dimensioni |
+| Esecuzione | ONNX su CPU tramite `fastembed`: nessuna GPU, nessun servizio esterno |
+| Dove risiede | `%LOCALAPPDATA%\calibre-mcp\models` (modificabile con `FASTEMBED_CACHE_PATH`), non nella cartella temporanea, così la pulizia disco non lo cancella |
+| Quando viene scaricato | **Una sola volta, da Python, durante il setup**: `install.ps1` esegue `calibre_mcp.py --download-model` subito dopo aver installato le dipendenze semantiche |
+| Rete dopo il setup | Nessuna: costruzione dell'indice e ogni query semantica girano interamente su questa macchina; testo dei libri e domande non escono mai |
+
+Se il download fallisce durante il setup (proxy, firewall), il resto dell'installazione non ne risente. Imposta
+`HTTPS_PROXY` e riprova:
+
+```powershell
+.venv\Scripts\python.exe calibre_mcp.py --download-model
+```
+
+Senza accesso a internet, copia la cartella del modello da un'altra macchina nella directory di cache indicata
+sopra, oppure usa `CALIBRE_MCP_EMBED_BACKEND=hash` (fallback lessicale offline, non semantico). Un altro modello
+`fastembed` si sceglie con `CALIBRE_MCP_EMBED_MODEL`; l'indice è legato al modello, quindi cambiarlo richiede
+`--build-embeddings --rebuild`.
 
 ## Variabili d'ambiente
 
@@ -348,7 +381,7 @@ semantica (circa 0,8 KB per chunk).
 | I libri LIT/MOBI falliscono | `ebook_convert` è `null` nello status → imposta `CALIBRE_EBOOK_CONVERT` |
 | "OCR needed" | PDF scansionato senza layer di testo: fai l'OCR (es. OCRmyPDF) e reinseriscilo in Calibre |
 | "Semantic search dependencies are missing" | Sono state installate in un altro Python: esegui il comando stampato nell'errore (usa il `python.exe` del server), poi riavvia il client |
-| La costruzione semantica non carica il modello | La prima costruzione scarica circa 220 MB da Hugging Face: verifica rete/`HTTPS_PROXY`, oppure usa `CALIBRE_MCP_EMBED_BACKEND=hash` offline |
+| Download del modello fallito durante il setup | Verifica rete/`HTTPS_PROXY`, poi `.venv\Scripts\python.exe calibre_mcp.py --download-model`; offline: vedi [Modello per la ricerca semantica](#modello-per-la-ricerca-semantica) |
 | Codex/ChatGPT: timeout di un tool | Alza `tool_timeout_sec` in `config.toml` (la conversione on-demand di LIT/MOBI può richiedere minuti) |
 
 ## Note di sicurezza
@@ -359,8 +392,9 @@ semantica (circa 0,8 KB per chunk).
 - **Query FTS**: in `all`/`any`/`phrase` ogni token è quotato, quindi gli operatori FTS5 nell'input non possono cambiare la semantica della query; `raw` è opt-in e gli errori di sintassi sono gestiti.
 - **Parsing di contenuto non fidato**: gli EPUB hanno limiti di dimensione per membro e totali (anti zip-bomb) e confinamento dei path nell'archivio; l'XML passa da `defusedxml`; i PDF vengono analizzati solo on-demand. PyMuPDF e i convertitori di Calibre sono codice nativo (superficie d'attacco memory-safety): se il rischio non è accettabile, usa `-Pdf pypdf` o `none`, lascia `ebook-convert` non disponibile e affidati all'indicizzazione di Calibre.
 - **Prompt injection indiretta**: testo dei libri e annotazioni sono contenuto di terzi restituito al modello. Le `instructions` del server lo dichiarano esplicitamente, ma non è un controllo forte: evita di combinare questo server, nella stessa sessione, con tool ad alto impatto (invio mail, shell, browser).
+- **Immagini**: decodificate da file non fidati con un limite di pixel verificato dall'header prima della decodifica (decompression bomb), limiti di dimensione e confinamento dei path nell'archivio; gli SVG vengono solo rasterizzati, mai passati come markup; l'output è sempre ricodificato. Anche il testo dentro le immagini è contenuto non fidato (prompt injection visiva): le instructions del server lo dichiarano.
 - **Linguaggio di query**: compilato in SQL parametrico; nomi di tabelle e colonne arrivano solo da una mappa fissa o dagli id interi delle colonne custom, mai dal testo dell'utente. Protezione ReDoS sulle regex (limite di lunghezza, niente quantificatori annidati o backreference, testo analizzato troncato).
-- **Ricerca semantica**: il modello di embedding è codice e pesi di terze parti scaricati da Hugging Face alla prima costruzione (fiducia nella supply chain); le query non lasciano mai la macchina. Usa `CALIBRE_MCP_EMBED_BACKEND=hash` dove i download non sono accettabili.
+- **Ricerca semantica**: il modello di embedding è codice e pesi di terze parti scaricati una volta da Hugging Face durante il setup (fiducia nella supply chain); le query non lasciano mai la macchina. Usa `CALIBRE_MCP_EMBED_BACKEND=hash` dove i download non sono accettabili.
 - **Nessun percorso di scrittura**: il server non modifica mai la libreria Calibre. Scrive solo i propri file sidecar in `%LOCALAPPDATA%\calibre-mcp`.
 - **Licenze**: PyMuPDF e pymupdf4llm sono AGPL-3.0; pypdf è BSD; fastembed è Apache-2.0.
 

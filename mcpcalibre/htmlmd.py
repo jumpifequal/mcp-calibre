@@ -11,12 +11,15 @@ from html.parser import HTMLParser
 
 _BLOCK = {"p", "div", "section", "article", "header", "footer", "aside", "figure", "figcaption",
           "dl", "dt", "dd", "body", "nav"}
-_SKIP = {"script", "style", "head", "svg", "math", "title"}
+_SKIP = {"script", "style", "head", "math", "title"}   # <svg>: text ignored, but its <image> counted
 
 
 class _MD(HTMLParser):
-    def __init__(self) -> None:
+    def __init__(self, fig_prefix: str | None = None) -> None:
         super().__init__(convert_charrefs=True)
+        self.fig_prefix = fig_prefix
+        self.n_img = 0
+        self.svg = 0
         self.out: list[str] = []
         self.skip = 0
         self.pre = 0
@@ -42,6 +45,17 @@ class _MD(HTMLParser):
 
     # ---- parser callbacks
     def handle_starttag(self, tag, attrs):
+        if tag in ("img", "image"):  # counted exactly like figures.epub_figures: same ids s<sec>-<n>
+            self.n_img += 1
+            if not self.skip:
+                a = dict(attrs)
+                alt = (a.get("alt") or a.get("title") or "").strip()
+                ref = f" {self.fig_prefix}-{self.n_img}" if self.fig_prefix else ""
+                self._w(f"[image{ref}: {alt}]" if alt else f"[image{ref}]")
+            return
+        if tag == "svg":
+            self.svg += 1
+            return
         if tag in _SKIP:
             self.skip += 1
             return
@@ -88,11 +102,11 @@ class _MD(HTMLParser):
             self.row = []
         elif tag in ("td", "th") and self.row is not None:
             self.cell = []
-        elif tag == "img":
-            alt = (a.get("alt") or "").strip()
-            self._w(f"[image: {alt}]" if alt else "[image]")
 
     def handle_endtag(self, tag):
+        if tag == "svg":
+            self.svg = max(0, self.svg - 1)
+            return
         if tag in _SKIP:
             self.skip = max(0, self.skip - 1)
             return
@@ -136,7 +150,7 @@ class _MD(HTMLParser):
                 self._nl()
 
     def handle_data(self, data):
-        if self.skip:
+        if self.skip or self.svg:
             return
         if self.pre:
             self._w(data)
@@ -151,8 +165,9 @@ class _MD(HTMLParser):
         return t.strip()
 
 
-def html_to_markdown(raw: bytes) -> str:
-    p = _MD()
+def html_to_markdown(raw: bytes, fig_prefix: str | None = None) -> str:
+    """fig_prefix (e.g. 's12') makes image placeholders carry figure ids: [image s12-3: alt]."""
+    p = _MD(fig_prefix)
     p.feed(raw.decode("utf-8", errors="replace"))
     p.close()
     return p.markdown()

@@ -103,7 +103,7 @@ powershell -ExecutionPolicy Bypass -File .\install.ps1 -Library "D:\Books\Calibr
 Then fully restart Claude Desktop (quit from the tray icon, not just close the window).
 
 CLI: `python calibre_mcp.py --status` · `--sync` · `--extract-missing [--max-books N]` ·
-`--build-embeddings [--max-books N] [--rebuild]` · `--library <path>` · `--transport http` (see below) · `--gen-token`.
+`--build-embeddings [--max-books N] [--rebuild]` · `--download-model` · `--library <path>` · `--transport http` (see below) · `--gen-token`.
 
 ## OpenAI clients: ChatGPT desktop app, Codex CLI, Codex IDE extension
 
@@ -231,12 +231,15 @@ All tools are read-only and accept an optional `library` argument when several l
 |---|---|
 | `calibre_search_books` | Metadata search: structured filters plus **Calibre search syntax** in `query`, `virtual_library`, sorting (title, author, added, published, modified, rating, series), pagination |
 | `calibre_search_fulltext` | Content search, BM25, accent-insensitive. Modes `all`/`any`/`phrase`/`raw` (FTS5). `query_filter` / `virtual_library` restrict candidates; `stemmed=true` matches word variants. Snippets are the passages covering the most specific matched clauses (phrases, `NEAR` groups; `NOT` terms excluded) and list them in `matched` |
-| `calibre_search_semantic` | Meaning-based passage search (opt-in embedding index) |
+| `calibre_search_semantic` | Meaning-based passage search (opt-in embedding index). Multilingual; `alt_queries` adds paraphrases or translations, fused per passage |
 | `calibre_get_book` | Full metadata, custom columns, reading progress, notes on its authors/series/tags, formats, text availability |
 | `calibre_read_text` | Text window by offset (optionally centred on a snippet offset) |
 | `calibre_find_in_book` | Keyword-in-context search inside one book, paginated |
 | `calibre_get_toc` | EPUB TOC (nav/NCX → section indices) or PDF outline + page count |
-| `calibre_read_section` | One EPUB chapter or a PDF page range; `output="markdown"` keeps headings, lists, tables, code |
+| `calibre_read_section` | One EPUB chapter or a PDF page range; `output="markdown"` keeps headings, lists, tables, code; image placeholders carry figure ids (`[image s3-2: alt]`) |
+| `calibre_list_figures` | Figures of a book as a cheap text list: id, caption or alt text, chapter or page, size. EPUB, PDF, and other formats via a cached EPUB conversion |
+| `calibre_get_figure` | One figure as an image, resized; SVG rasterised |
+| `calibre_render_page` | A PDF page, or an area of it, as an image: for diagrams drawn as vectors, tables, formulas |
 | `calibre_list_facets` | Authors/tags/series/publishers/languages/formats with book counts |
 | `calibre_list_custom_columns` | Your `#columns`: type, multiplicity, coverage, top values |
 | `calibre_list_virtual_libraries` | Virtual libraries and saved searches with expression and book count |
@@ -289,29 +292,59 @@ the default. Each library gets its own sidecar index.
 (`exploits` ↔ `exploitation`). It roughly doubles the index size and is filled incrementally in the background.
 Porter is an **English** stemmer: it does not help with Italian text.
 
-**Semantic search.** The dependencies (`requirements-semantic.txt`: numpy + fastembed) are installed by default by
-`install.ps1` (skip with `-NoSemantic`; skipped automatically on 32-bit Python). The index is opt-in, CPU-heavy
-and never built automatically:
+**Semantic search.** Dependencies (`requirements-semantic.txt`: numpy + fastembed) and the model are installed by
+`install.ps1` (skip with `-NoSemantic`; skipped automatically on 32-bit Python): see
+[Semantic search model](#semantic-search-model). The index is opt-in, CPU-heavy (half the cores by default,
+`CALIBRE_MCP_EMBED_THREADS`) and never built automatically:
 
 ```powershell
-.\.venv\Scripts\python.exe .\calibre_mcp.py --build-embeddings --max-books 50   # incremental, resumable
+.venv\Scripts\python.exe calibre_mcp.py --build-embeddings --max-books 50   # incremental, resumable
 ```
 
-If the tool reports missing dependencies, install them **into the server's venv**, not the system Python (the
-error message prints the exact command), then restart the MCP client:
+If a tool reports missing dependencies, install them **into the server's venv**, not the system Python (the error
+message prints the exact command), then restart the MCP client. Up to 300 chunks per book are embedded (evenly
+sampled) and stored as float16 in `embeddings.db`; the matrix is loaded in memory on the first semantic query
+(about 0.8 KB per chunk).
 
-```powershell
-.\.venv\Scripts\python.exe -m pip install -r requirements-semantic.txt
-```
+**Figures.** `calibre_list_figures` first (text only, cheap), then `calibre_get_figure` for the one you need. In
+PDFs, a caption without an embedded image means a vector drawing: `calibre_render_page` with a `clip` around it.
+Every image costs vision tokens, so nothing is sent in bulk.
 
-The default model is a multilingual MiniLM (Italian + English, 384 dimensions, ~220 MB), downloaded once from
-Hugging Face on the first build into `%LOCALAPPDATA%\calibre-mcp\models` (not the temp folder, so disk cleanup
-does not delete it). Build from the CLI first: the download can take longer than a client's tool timeout.
-Behind a corporate proxy set `HTTPS_PROXY`. Embedding uses half the CPU cores by default
-(`CALIBRE_MCP_EMBED_THREADS`). Up to 300 chunks per book are embedded (evenly sampled), stored as float16 in
-`embeddings.db`; the matrix is loaded in memory on the first semantic query (about 0.8 KB per chunk).
+**Languages.** Full-text search is lexical: the query must use the language of the books (an Italian query does
+not match English text). The server instructions tell the model to translate the query, or to OR the
+translations together for mixed libraries. Semantic search is multilingual (an Italian question also finds
+English passages); the model can pass the English translation in `alt_queries` for extra recall. Stemming is
+English-only and translating the query does not change that for Italian books.
 
 **Markdown for PDF pages.** `pip install pymupdf4llm` (AGPL-3.0). EPUB Markdown is built in.
+
+## Semantic search model
+
+Semantic search uses **`sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2`**, a sentence-embedding model
+trained to place sentences in **50+ languages, Italian included, in the same vector space**: an Italian question
+and an English passage that say the same thing end up close together. You can therefore ask in Italian and find
+passages in English books, or the other way round, with no translation step. (Lexical full-text search is
+different: there the query must be in the language of the books, see [Optional features](#optional-features).)
+
+| | |
+|---|---|
+| Size | ~220 MB, 384-dimensional vectors |
+| Runtime | ONNX on CPU through `fastembed`: no GPU, no external service |
+| Where it lives | `%LOCALAPPDATA%\calibre-mcp\models` (override with `FASTEMBED_CACHE_PATH`), not the temp folder, so disk cleanup does not remove it |
+| When it is downloaded | **Once, by Python, during setup**: `install.ps1` runs `calibre_mcp.py --download-model` right after installing the semantic dependencies |
+| Network after setup | None: building the index and every semantic query run entirely on this machine; book text and questions never leave it |
+
+If the download fails during setup (proxy, firewall), the rest of the installation is unaffected. Set
+`HTTPS_PROXY` and retry:
+
+```powershell
+.venv\Scripts\python.exe calibre_mcp.py --download-model
+```
+
+Without internet access, copy the model folder from another machine into the cache directory above, or use
+`CALIBRE_MCP_EMBED_BACKEND=hash` (an offline lexical fallback, not semantic). Another `fastembed` model can be
+selected with `CALIBRE_MCP_EMBED_MODEL`; the index is tied to the model, so changing it requires
+`--build-embeddings --rebuild`.
 
 ## Environment variables
 
@@ -344,7 +377,7 @@ Behind a corporate proxy set `HTTPS_PROXY`. Embedding uses half the CPU cores by
 | LIT/MOBI books fail | `ebook_convert` is `null` in status → set `CALIBRE_EBOOK_CONVERT` |
 | "OCR needed" | scanned PDF without a text layer: run OCR (e.g. OCRmyPDF) and re-add it to Calibre |
 | "Semantic search dependencies are missing" | They were installed into a different Python: run the command printed in the error (it uses the server's own `python.exe`), then restart the client |
-| Semantic build fails to load the model | First build downloads ~220 MB from Hugging Face: check network/`HTTPS_PROXY`, or use `CALIBRE_MCP_EMBED_BACKEND=hash` offline |
+| Model download failed during setup | Check network/`HTTPS_PROXY`, then `.venv\Scripts\python.exe calibre_mcp.py --download-model`; offline: see [Semantic search model](#semantic-search-model) |
 | Codex/ChatGPT: tool times out | Raise `tool_timeout_sec` in `config.toml` (on-demand LIT/MOBI conversion can take minutes) |
 
 ## Security notes
@@ -355,8 +388,9 @@ Behind a corporate proxy set `HTTPS_PROXY`. Embedding uses half the CPU cores by
 - **FTS queries**: in `all`/`any`/`phrase` every token is quoted, so FTS5 operators in user input cannot change query semantics; `raw` is opt-in and syntax errors are handled.
 - **Untrusted content parsing**: EPUBs have per-member and total size limits (anti zip-bomb) and in-archive path confinement; XML goes through `defusedxml`; PDFs are parsed only on demand. PyMuPDF and Calibre's converters are native code (memory-safety attack surface): if that risk is not acceptable, use `-Pdf pypdf` or `none`, leave `ebook-convert` unavailable, and rely on Calibre's own indexing.
 - **Indirect prompt injection**: book text and annotations are third-party content returned to the model. The server's `instructions` declare this explicitly, but that is not a strong control: avoid combining this server, in the same session, with high-impact tools (email sending, shell, browser).
+- **Images**: decoded from untrusted files with a pixel budget checked from the header before decoding (decompression bombs), size caps and in-archive path confinement; SVG is only rasterised, never passed on as markup; output is always re-encoded. Text inside images is untrusted content too (visual prompt injection): the server instructions say so.
 - **Query language**: compiled to parametrised SQL; table and column names come only from a fixed map or from integer custom-column ids, never from user text. Regex guard against ReDoS (length cap, no nested quantifiers or backreferences, subject truncated).
-- **Semantic search**: the embedding model is third-party code and weights downloaded from Hugging Face on the first build (supply-chain trust); queries never leave the machine. Use `CALIBRE_MCP_EMBED_BACKEND=hash` where downloads are not acceptable.
+- **Semantic search**: the embedding model is third-party code and weights downloaded once from Hugging Face during setup (supply-chain trust); queries never leave the machine. Use `CALIBRE_MCP_EMBED_BACKEND=hash` where downloads are not acceptable.
 - **No write path**: the server never modifies the Calibre library. Its only writes are to its own sidecar files in `%LOCALAPPDATA%\calibre-mcp`.
 - **Licences**: PyMuPDF and pymupdf4llm are AGPL-3.0; pypdf is BSD; fastembed is Apache-2.0.
 

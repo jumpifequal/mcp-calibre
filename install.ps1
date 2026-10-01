@@ -17,8 +17,9 @@
   Skip the initial full-text index build.
 
 .PARAMETER NoSemantic
-  Skip the semantic-search dependencies (requirements-semantic.txt: numpy, fastembed, ~28 packages).
-  They are installed by default; the index itself is always built later, explicitly:
+  Skip the semantic-search dependencies (requirements-semantic.txt: numpy, fastembed, ~28 packages) and the
+  model download (~220 MB, once, into %LOCALAPPDATA%\calibre-mcp\models). Both happen by default; the index
+  itself is always built later, explicitly:
   .venv\Scripts\python.exe calibre_mcp.py --build-embeddings
   (-Semantic is still accepted for backward compatibility and has no effect.)
 
@@ -75,8 +76,15 @@ if (-not $NoSemantic) {
     } else {
         & $py -m pip install --disable-pip-version-check -q -r (Join-Path $here 'requirements-semantic.txt')
         if ($LASTEXITCODE -eq 0) {
-            Write-Host "[+] Semantic search deps installed. Build the index when ready (CPU heavy, resumable):"
-            Write-Host "    $py $server --build-embeddings --max-books 50"
+            Write-Host "[+] Semantic search deps installed"
+            Write-Host "[*] Downloading the embedding model (~220 MB, once) into $env:LOCALAPPDATA\calibre-mcp\models ..."
+            & $py $server --download-model
+            if ($LASTEXITCODE -eq 0) {
+                Write-Host "[+] Model ready: semantic search runs fully on this machine from now on"
+            } else {
+                Write-Warning "Model download failed (network/proxy? set HTTPS_PROXY). Core server is fine; retry with: $py $server --download-model"
+            }
+            Write-Host "    Build the index when ready (CPU heavy, resumable): $py $server --build-embeddings --max-books 50"
         } else {
             Write-Warning "Semantic search deps failed to install; core server is fine. Retry: $py -m pip install -r requirements-semantic.txt"
         }

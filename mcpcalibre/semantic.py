@@ -104,6 +104,20 @@ def get_embedder(fold: Callable[[str], str]):
         return _EMBEDDER[key]
 
 
+def prefetch_model(fold: Callable[[str], str]) -> dict[str, Any]:
+    """Download (once) and load the embedding model locally, then run one probe embedding.
+    Used by setup so the first semantic build/query does not have to download anything."""
+    t0 = time.monotonic()
+    emb = get_embedder(fold)
+    emb.embed(["probe"])
+    info: dict[str, Any] = {"backend": emb.name, "dim": emb.dim, "seconds": round(time.monotonic() - t0, 1)}
+    cache = os.environ.get("FASTEMBED_CACHE_PATH") or (str(MODEL_DIR) if MODEL_DIR else None)
+    if cache and Path(cache).is_dir() and emb.name != "hash":
+        size = sum(f.stat().st_size for f in Path(cache).rglob("*") if f.is_file())
+        info.update(cache_dir=cache, size_mb=round(size / 2 ** 20, 1))
+    return info
+
+
 def chunk_text(text: str) -> list[tuple[int, str]]:
     out, pos, n = [], 0, len(text)
     while pos < n:
