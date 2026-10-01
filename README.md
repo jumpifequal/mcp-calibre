@@ -230,7 +230,7 @@ All tools are read-only and accept an optional `library` argument when several l
 | Tool | Purpose |
 |---|---|
 | `calibre_search_books` | Metadata search: structured filters plus **Calibre search syntax** in `query`, `virtual_library`, sorting (title, author, added, published, modified, rating, series), pagination |
-| `calibre_search_fulltext` | Content search, BM25, accent-insensitive. Modes `all`/`any`/`phrase`/`raw` (FTS5). `query_filter` / `virtual_library` restrict candidates; `stemmed=true` matches word variants |
+| `calibre_search_fulltext` | Content search, BM25, accent-insensitive. Modes `all`/`any`/`phrase`/`raw` (FTS5). `query_filter` / `virtual_library` restrict candidates; `stemmed=true` matches word variants. Snippets are the passages covering the most specific matched clauses (phrases, `NEAR` groups; `NOT` terms excluded) and list them in `matched` |
 | `calibre_search_semantic` | Meaning-based passage search (opt-in embedding index) |
 | `calibre_get_book` | Full metadata, custom columns, reading progress, notes on its authors/series/tags, formats, text availability |
 | `calibre_read_text` | Text window by offset (optionally centred on a snippet offset) |

@@ -34,3 +34,4 @@ jobs:
           python tests/test_v4.py
           python tests/test_v4_index.py
           python tests/test_real_cases.py
+          python tests/test_snippets.py

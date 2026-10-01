@@ -233,7 +233,7 @@ Tutti i tool sono in sola lettura e accettano un argomento opzionale `library` q
 | Tool | Scopo |
 |---|---|
 | `calibre_search_books` | Ricerca sui metadati: filtri strutturati più la **sintassi di ricerca di Calibre** in `query`, `virtual_library`, ordinamento (title, author, added, published, modified, rating, series), paginazione |
-| `calibre_search_fulltext` | Ricerca nel contenuto, BM25, insensibile agli accenti. Modalità `all`/`any`/`phrase`/`raw` (FTS5). `query_filter` / `virtual_library` restringono i candidati; `stemmed=true` trova le varianti delle parole |
+| `calibre_search_fulltext` | Ricerca nel contenuto, BM25, insensibile agli accenti. Modalità `all`/`any`/`phrase`/`raw` (FTS5). `query_filter` / `virtual_library` restringono i candidati; `stemmed=true` trova le varianti delle parole. Gli snippet sono i passaggi che coprono le clausole più specifiche trovate (frasi, gruppi `NEAR`; i termini in `NOT` sono esclusi) e le elencano in `matched` |
 | `calibre_search_semantic` | Ricerca di passaggi per significato (indice di embedding opt-in) |
 | `calibre_get_book` | Metadati completi, colonne custom, progresso di lettura, note su autori/serie/tag, formati, testo disponibile |
 | `calibre_read_text` | Finestra di testo per offset (opzionalmente centrata sull'offset di uno snippet) |

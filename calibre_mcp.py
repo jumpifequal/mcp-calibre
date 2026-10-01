@@ -73,7 +73,7 @@ from typing import Annotated, Any, Iterator, Literal, Optional
 from pydantic import Field
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))  # bundled package next to this file
-from mcpcalibre import htmlmd, semantic  # noqa: E402
+from mcpcalibre import highlight, htmlmd, semantic  # noqa: E402
 from mcpcalibre import query as cql  # noqa: E402
 
 try:  # hardened XML parsing if available (OPF/NCX come from untrusted ebooks)
@@ -91,7 +91,7 @@ except ImportError:  # SDK v1
     from mcp.server.fastmcp.exceptions import ToolError  # type: ignore
 from mcp.types import ToolAnnotations
 
-__version__ = "4.0.4"
+__version__ = "4.0.5"
 
 # --------------------------------------------------------------------------- config
 FORMAT_PREF = ["EPUB", "KEPUB", "AZW3", "AZW", "MOBI", "FB2", "DOCX", "HTMLZ",
@@ -1324,9 +1324,16 @@ def calibre_search_fulltext(
                                  "to the search bar (or Preferences > Searching) and enable indexing.")
         raise ValueError(f"Sidecar index empty (state: {idx['state']}). Wait for the background sync "
                          "or run: python calibre_mcp.py --sync")
-    if stemmed and mode != "raw":
-        terms = [crude_stem(t) for t in terms]
     hits = LIB.index.search(match, allowed, limit_rows=limit * 4, stemmed=stemmed)
+    # snippet clauses mirror the query: phrases stay phrases, NOT branches are excluded, and windows
+    # covering the most specific clauses win (not just the first occurrence of any word)
+    if mode == "raw":
+        clauses = highlight.clauses_from_raw(query, fold, loose_end=stemmed)
+    else:
+        toks = _TOKEN.findall(query)
+        words = [crude_stem(t) if stemmed else t for t, _ in toks]
+        clauses = highlight.clauses_from_terms(words, [bool(star) for _, star in toks], mode == "phrase",
+                                               fold, loose_end=stemmed)
     best: dict[int, tuple[str, float]] = {}
     for book, fmt, sc in hits:
         cur = best.get(book)
@@ -1348,7 +1355,8 @@ def calibre_search_fulltext(
                     with LIB.index.ro() as sc:
                         row = sc.execute("SELECT text FROM extracted WHERE book=? AND fmt=?", (b, fmt)).fetchone()
                 if row:
-                    item["snippets"] = snippets(row[0], terms, snippets_per_book, snippet_chars)
+                    item["snippets"] = highlight.best_snippets(row[0], clauses, snippets_per_book,
+                                                               snippet_chars, fold)
             results.append(item)
     out = {"count": len(results), "results": results}
     if idx.get("state") == "syncing" or idx.get("pending"):
