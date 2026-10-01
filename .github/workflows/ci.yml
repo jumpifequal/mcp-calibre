@@ -1,0 +1,29 @@
+name: ci
+on: [push, pull_request]
+permissions:
+  contents: read
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+        python: ["3.12", "3.13"]
+    runs-on: ${{ matrix.os }}
+    env:
+      CALIBRE_MCP_DATA: ${{ github.workspace }}/.ci-data
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - run: pip install -r requirements.txt pymupdf
+      - run: python -m py_compile calibre_mcp.py
+      - run: python tests/make_fake_library.py
+      - name: sync + status + smoke
+        shell: bash
+        run: |
+          export CALIBRE_LIBRARY="$GITHUB_WORKSPACE/tests/Calibre Library"
+          python calibre_mcp.py --sync
+          python calibre_mcp.py --status
+          python tests/smoke_test.py

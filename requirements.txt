@@ -1,0 +1,6 @@
+mcp>=1.10          # both SDK v1 (FastMCP) and v2 (MCPServer) are supported
+pydantic>=2
+defusedxml>=0.7    # hardened XML parsing for OPF/NCX of untrusted EPUBs
+# Optional PDF backend (only for PDFs not indexed by Calibre and page-range reading):
+#   pymupdf  -> fast, AGPL-3.0 (check licensing in a corporate context)
+#   pypdf    -> slow, BSD

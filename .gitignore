@@ -1,0 +1,7 @@
+.venv/
+__pycache__/
+*.pyc
+*.log
+tests/Calibre Library/
+*.pem
+.env
