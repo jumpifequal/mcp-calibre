@@ -16,6 +16,10 @@
 .PARAMETER SkipSync
   Skip the initial full-text index build.
 
+.PARAMETER Semantic
+  Also install the optional semantic-search dependencies (numpy, fastembed). The index itself is
+  built later, explicitly: .venv\Scripts\python.exe calibre_mcp.py --build-embeddings
+
 .EXAMPLE
   powershell -ExecutionPolicy Bypass -File .\install.ps1 -Library "D:\Books\Calibre Library" -Pdf pymupdf -Register
 #>
@@ -24,7 +28,8 @@ param(
     [string]$Library,
     [ValidateSet('pymupdf', 'pypdf', 'none')][string]$Pdf = 'pymupdf',
     [switch]$Register,
-    [switch]$SkipSync
+    [switch]$SkipSync,
+    [switch]$Semantic
 )
 $ErrorActionPreference = 'Stop'
 
@@ -59,6 +64,10 @@ if (-not (Test-Path $py)) {
 & $py -m pip install --disable-pip-version-check -q --upgrade pip
 & $py -m pip install --disable-pip-version-check -q -r (Join-Path $here 'requirements.txt')
 if ($Pdf -ne 'none') { & $py -m pip install --disable-pip-version-check -q $Pdf }
+if ($Semantic) {
+    & $py -m pip install --disable-pip-version-check -q numpy fastembed
+    Write-Host "[+] Semantic search deps installed. Build the index when ready: $py $server --build-embeddings"
+}
 Write-Host "[+] Dependencies installed (PDF backend: $Pdf)"
 
 $envVars = @{}

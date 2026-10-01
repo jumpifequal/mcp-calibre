@@ -2,7 +2,7 @@
 import sys, json; sys.argv=['x']; sys.path.insert(0, str(__import__('pathlib').Path(__file__).resolve().parents[1]))
 import calibre_mcp as m
 from pathlib import Path
-m.LIB = m.Library(m.detect_library(), m.default_data_dir())
+m.set_libraries([m.detect_library()], m.default_data_dir())
 def show(name, **kw):
     try: r = getattr(m, name)(**kw); print(f"== {name} {kw}\n", json.dumps(r, ensure_ascii=False)[:900])
     except Exception as e: print(f"== {name} {kw} -> ERR {type(e).__name__}: {e}")

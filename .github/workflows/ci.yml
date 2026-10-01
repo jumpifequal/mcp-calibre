@@ -17,7 +17,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python }}
-      - run: pip install -r requirements.txt pymupdf
+      - run: pip install -r requirements.txt pymupdf numpy
       - run: python -m py_compile calibre_mcp.py
       - run: python tests/make_fake_library.py
       - name: sync + status + smoke
@@ -27,3 +27,5 @@ jobs:
           python calibre_mcp.py --sync
           python calibre_mcp.py --status
           python tests/smoke_test.py
+          python tests/test_v4.py
+          python tests/test_v4_index.py

@@ -5,3 +5,7 @@ __pycache__/
 tests/Calibre Library/
 *.pem
 .env
+
+# local publishing helpers (not part of the project)
+publish_me.bat
+publish-to-github.ps1

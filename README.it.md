@@ -103,8 +103,8 @@ powershell -ExecutionPolicy Bypass -File .\install.ps1 -Library "D:\Books\Calibr
 
 Poi riavvia completamente Claude Desktop (esci dall'icona nella tray, non basta chiudere la finestra).
 
-CLI: `python calibre_mcp.py --status` · `--sync` · `--extract-missing [--max-books N]` · `--library <path>` ·
-`--transport http` (vedi sotto) · `--gen-token`.
+CLI: `python calibre_mcp.py --status` · `--sync` · `--extract-missing [--max-books N]` ·
+`--build-embeddings [--max-books N] [--rebuild]` · `--library <path>` · `--transport http` (vedi sotto) · `--gen-token`.
 
 ## Trasporto HTTP
 
@@ -175,18 +175,83 @@ pubblico e OAuth, non un token statico: questo server non è pensato per quel ti
 
 ## Tool
 
+Tutti i tool sono in sola lettura e accettano un argomento opzionale `library` quando sono configurate più librerie.
+
 | Tool | Scopo |
 |---|---|
-| `calibre_search_books` | Ricerca sui metadati: testo libero, title/author/tag/series/publisher/language/format/identifier, rating, date, `has_annotations`, ordinamento, paginazione |
-| `calibre_search_fulltext` | Ricerca nel contenuto, ranking BM25, insensibile agli accenti. Modalità `all`/`any`/`phrase`/`raw` (FTS5: `NEAR`, `OR`, `prefix*`). I filtri sui metadati restringono i libri candidati; gli snippet riportano un `offset` |
-| `calibre_get_book` | Metadati completi, identifier, descrizione, formati, testo disponibile per formato, errori di estrazione di Calibre |
+| `calibre_search_books` | Ricerca sui metadati: filtri strutturati più la **sintassi di ricerca di Calibre** in `query`, `virtual_library`, ordinamento (title, author, added, published, modified, rating, series), paginazione |
+| `calibre_search_fulltext` | Ricerca nel contenuto, BM25, insensibile agli accenti. Modalità `all`/`any`/`phrase`/`raw` (FTS5). `query_filter` / `virtual_library` restringono i candidati; `stemmed=true` trova le varianti delle parole |
+| `calibre_search_semantic` | Ricerca di passaggi per significato (indice di embedding opt-in) |
+| `calibre_get_book` | Metadati completi, colonne custom, progresso di lettura, note su autori/serie/tag, formati, testo disponibile |
 | `calibre_read_text` | Finestra di testo per offset (opzionalmente centrata sull'offset di uno snippet) |
 | `calibre_find_in_book` | Ricerca keyword-in-context dentro un singolo libro, paginata |
 | `calibre_get_toc` | Indice EPUB (nav/NCX → indici di sezione) o outline PDF + numero di pagine |
-| `calibre_read_section` | Un capitolo EPUB o un intervallo di pagine PDF (max 30 per chiamata), per citazioni precise |
+| `calibre_read_section` | Un capitolo EPUB o un intervallo di pagine PDF; `output="markdown"` mantiene heading, liste, tabelle, codice |
 | `calibre_list_facets` | Autori/tag/serie/editori/lingue/formati con il numero di libri |
-| `calibre_get_annotations` | Highlight, note e bookmark del viewer di Calibre (un libro o tutta la libreria) |
-| `calibre_library_status` | Diagnostica: copertura FTS di Calibre, stato del sidecar, backend PDF, path di `ebook-convert`, versione SQLite |
+| `calibre_list_custom_columns` | Le tue `#colonne`: tipo, multiplicità, copertura, valori più frequenti |
+| `calibre_list_virtual_libraries` | Virtual library e ricerche salvate con espressione e numero di libri |
+| `calibre_reading_progress` | Ultime posizioni di lettura dal viewer di Calibre: in lettura / finiti |
+| `calibre_get_annotations` | Highlight, note e bookmark del viewer di Calibre |
+| `calibre_get_notes` | Note di Calibre 7+ su autori, tag, serie, editori |
+| `calibre_get_cover` | Copertina come immagine, ridimensionata |
+| `calibre_similar_books` | Libri simili per metadati (i tag rari pesano di più) o per contenuto (embedding) |
+| `calibre_find_duplicates` | Probabili duplicati per titolo normalizzato, titolo+autore o ISBN |
+| `calibre_list_libraries` | Librerie configurate |
+| `calibre_library_status` | Diagnostica: copertura FTS, sidecar e indice stemmed, indice semantico, funzioni attive |
+
+### Sintassi di ricerca di Calibre (`query`)
+
+| Esempio | Significato |
+|---|---|
+| `kerberos` / `"lateral movement"` | Titolo, autori, tag, serie, editore, descrizione |
+| `tag:security and not tag:malware` | Booleani `and` / `or` / `not`, parentesi, AND implicito |
+| `author:"=Bruce Schneier"` · `title:"~^Practical"` | Corrispondenza esatta · espressione regolare |
+| `rating:>=4` · `#pages:>500` | Confronti numerici (rating in stelle) |
+| `pubdate:>2020` · `date:<2024-03` · `date:>30daysago` | Date: YYYY, YYYY-MM, YYYY-MM-DD, today, yesterday, thismonth, thisyear, Ndaysago |
+| `formats:pdf` · `languages:ita` · `cover:false` · `size:>20M` | Formati, lingue, copertina, dimensione del file più grande |
+| `identifiers:isbn:true` · `isbn:9781593272906` | Identifier |
+| `#genre:"=netsec"` · `#course:sans` · `#pages:>300` | Colonne custom (text, enumeration, series, comments, int, float, rating, bool, datetime), lette a runtime da ogni libreria. Lookup name come in Calibre; funziona anche l'intestazione visibile (`#mustread` per "Must Read") |
+| `#mustread:yes` · `:no` · `:true` · `:false` | Le colonne sì/no seguono esattamente Calibre. Default (tristate): `yes`/`checked` = Sì, `no`/`unchecked` = No, `true` = Sì o No (impostato), `false`/`empty`/`blank` = non impostato. Con l'impostazione a due stati di Calibre: `true`/`yes` = Sì, `false`/`no` = No o non impostato |
+| `vl:"Unread security"` · `search:"Big books"` | Virtual library e ricerche salvate, espanse ricorsivamente con rilevamento dei cicli |
+
+Non supportati: `template:`, `marked:`, `ondevice:`, colonne composite (calcolate). Tutti i valori sono passati
+come parametri SQL. Le espressioni regolari hanno un limite di lunghezza e i pattern con quantificatori annidati
+o backreference vengono rifiutati (il modulo `re` di Python non ha timeout).
+
+### Resources e prompts
+
+| Resource | Contenuto |
+|---|---|
+| `calibre-mcp://book/{id}` | Scheda del libro in Markdown: metadati, colonne custom, progresso, descrizione, indice |
+| `calibre-mcp://book/{id}/section/{n}` | Un capitolo EPUB in Markdown |
+| `calibre-mcp://book/{id}/highlights` | Highlight e note del viewer in Markdown |
+
+Prompts: `summarize_book`, `research_topic`, `compare_books`, `export_highlights`, `reading_status`.
+Le resources si riferiscono alla libreria predefinita. Lo schema è `calibre-mcp://`, non `calibre://`, che è
+quello dei link desktop di Calibre.
+
+## Funzioni opzionali
+
+**Più librerie.** Imposta `CALIBRE_LIBRARIES` con i path separati da `;` su Windows (`:` altrove); la prima è
+quella predefinita. Ogni libreria ha il proprio indice sidecar.
+
+**Ricerca con stemming.** `CALIBRE_MCP_STEMMING=1` costruisce un secondo indice FTS5 con lo stemmer Porter
+(`exploits` ↔ `exploitation`). Raddoppia circa lo spazio dell'indice e viene riempito in modo incrementale in
+background. Porter è uno stemmer **inglese**: non aiuta con il testo italiano.
+
+**Ricerca semantica.** Opt-in, pesante sulla CPU, mai costruita in automatico:
+
+```powershell
+.\install.ps1 -Semantic            # numpy + fastembed
+.\.venv\Scripts\python.exe .\calibre_mcp.py --build-embeddings --max-books 50   # incrementale, riprendibile
+```
+
+Il modello predefinito è un MiniLM multilingue (italiano + inglese, 384 dimensioni), scaricato una volta da
+Hugging Face alla prima costruzione. Vengono indicizzati fino a 300 chunk per libro (campionati uniformemente),
+salvati in float16 in `embeddings.db`; la matrice viene caricata in memoria alla prima query semantica (circa
+0,8 KB per chunk).
+
+**Markdown per le pagine PDF.** `pip install pymupdf4llm` (AGPL-3.0). Il Markdown per gli EPUB è integrato.
 
 ## Variabili d'ambiente
 
@@ -201,6 +266,11 @@ pubblico e OAuth, non un token statico: questo server non è pensato per quel ti
 | `CALIBRE_MCP_CONVERT_TIMEOUT` | `180` s per conversione |
 | `CALIBRE_MCP_LOG_LEVEL` | `INFO` (`DEBUG` registra anche le query) |
 | `CALIBRE_MCP_HTTP_TOKEN` | — (obbligatorio per `--transport http`, min 24 caratteri) |
+| `CALIBRE_LIBRARIES` | — più librerie, separate da `;` su Windows; la prima è la predefinita |
+| `CALIBRE_MCP_STEMMING` | `0` (`1` = secondo indice con stemming) |
+| `CALIBRE_MCP_EMBED_BACKEND` | `fastembed` (`hash` = fallback lessicale per test o macchine air-gapped) |
+| `CALIBRE_MCP_EMBED_MODEL` | `sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2` |
+| `CALIBRE_MCP_EMBED_MAX_CHUNKS` | `300` chunk per libro |
 
 ## Troubleshooting
 
@@ -220,12 +290,16 @@ pubblico e OAuth, non un token statico: questo server non è pensato per quel ti
 - **Query FTS**: in `all`/`any`/`phrase` ogni token è quotato, quindi gli operatori FTS5 nell'input non possono cambiare la semantica della query; `raw` è opt-in e gli errori di sintassi sono gestiti.
 - **Parsing di contenuto non fidato**: gli EPUB hanno limiti di dimensione per membro e totali (anti zip-bomb) e confinamento dei path nell'archivio; l'XML passa da `defusedxml`; i PDF vengono analizzati solo on-demand. PyMuPDF e i convertitori di Calibre sono codice nativo (superficie d'attacco memory-safety): se il rischio non è accettabile, usa `-Pdf pypdf` o `none`, lascia `ebook-convert` non disponibile e affidati all'indicizzazione di Calibre.
 - **Prompt injection indiretta**: testo dei libri e annotazioni sono contenuto di terzi restituito al modello. Le `instructions` del server lo dichiarano esplicitamente, ma non è un controllo forte: evita di combinare questo server, nella stessa sessione, con tool ad alto impatto (invio mail, shell, browser).
-- **Licenze**: PyMuPDF è AGPL-3.0; pypdf è BSD.
+- **Linguaggio di query**: compilato in SQL parametrico; nomi di tabelle e colonne arrivano solo da una mappa fissa o dagli id interi delle colonne custom, mai dal testo dell'utente. Protezione ReDoS sulle regex (limite di lunghezza, niente quantificatori annidati o backreference, testo analizzato troncato).
+- **Ricerca semantica**: il modello di embedding è codice e pesi di terze parti scaricati da Hugging Face alla prima costruzione (fiducia nella supply chain); le query non lasciano mai la macchina. Usa `CALIBRE_MCP_EMBED_BACKEND=hash` dove i download non sono accettabili.
+- **Nessun percorso di scrittura**: il server non modifica mai la libreria Calibre. Scrive solo i propri file sidecar in `%LOCALAPPDATA%\calibre-mcp`.
+- **Licenze**: PyMuPDF e pymupdf4llm sono AGPL-3.0; pypdf è BSD; fastembed è Apache-2.0.
 
 ## Limitazioni note
 
-- Le colonne custom di Calibre (tabelle `custom_column_N`) non sono esposte.
-- Una libreria per istanza del server (per più librerie: più voci in `mcpServers` con `CALIBRE_LIBRARY` diversi).
+- Le colonne custom composite (calcolate da template) non sono leggibili: Calibre non ne salva i valori.
+- La sintassi di ricerca è un ampio sottoinsieme di quella di Calibre: niente `template:`, `marked:`, `ondevice:`, e il match gerarchico dei tag (`tag:.parent`) non è gestito in modo speciale.
+- Lo stemming è solo inglese (Porter).
 - Libreria su share di rete o OneDrive: funziona in sola lettura, ma con latenze maggiori ed effetti collaterali della sincronizzazione per Calibre stesso.
 - Gli offset restituiti da `search_fulltext` si riferiscono al testo del `format` indicato, non alle sezioni EPUB estratte on-demand.
 
