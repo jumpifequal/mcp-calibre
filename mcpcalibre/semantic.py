@@ -26,6 +26,14 @@ CHUNK = int(os.environ.get("CALIBRE_MCP_EMBED_CHUNK", "1200"))
 OVERLAP = 200
 MAX_CHUNKS = int(os.environ.get("CALIBRE_MCP_EMBED_MAX_CHUNKS", "300"))
 DEFAULT_MODEL = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
+MODEL_DIR: Optional[Path] = None   # set by calibre_mcp at startup (sidecar dir), not the OS temp folder
+_REQ = Path(__file__).resolve().parent.parent / "requirements-semantic.txt"
+
+
+def _install_hint() -> str:
+    import sys
+    return (f'install them into the server\'s environment:  "{sys.executable}" -m pip install -r "{_REQ}"  '
+            "then restart the MCP client and build the index:  calibre_mcp.py --build-embeddings")
 
 
 def _np():
@@ -33,7 +41,7 @@ def _np():
         import numpy as np  # type: ignore
         return np
     except ImportError as exc:
-        raise ValueError("Semantic search needs numpy: pip install numpy fastembed") from exc
+        raise ValueError("Semantic search dependencies are missing (numpy, fastembed): " + _install_hint()) from exc
 
 
 class HashEmbedder:
@@ -59,9 +67,19 @@ class FastEmbedder:
         try:
             from fastembed import TextEmbedding  # type: ignore
         except ImportError as exc:
-            raise ValueError("Semantic search backend 'fastembed' not installed: pip install fastembed "
-                             "(or set CALIBRE_MCP_EMBED_BACKEND=hash for a lexical fallback)") from exc
-        self.model = TextEmbedding(model_name=model)
+            raise ValueError("Semantic search backend 'fastembed' is not installed: " + _install_hint() +
+                             "  (or set CALIBRE_MCP_EMBED_BACKEND=hash for a lexical fallback)") from exc
+        cache = os.environ.get("FASTEMBED_CACHE_PATH") or (str(MODEL_DIR) if MODEL_DIR else None)
+        # half the cores by default: building the index must not saturate the machine
+        threads = int(os.environ.get("CALIBRE_MCP_EMBED_THREADS", "0")) or max(1, (os.cpu_count() or 2) // 2)
+        try:
+            self.model = TextEmbedding(model_name=model, cache_dir=cache, threads=threads)
+        except Exception as exc:  # noqa: BLE001 - download/ONNX errors come in many types
+            raise ValueError(
+                f"Could not load embedding model {model!r}: {exc}. The first use downloads it once "
+                f"(~220 MB for the default) from Hugging Face into {cache or 'the fastembed cache'}; "
+                "check network/proxy (HTTPS_PROXY), or pre-seed that folder, or set "
+                "CALIBRE_MCP_EMBED_BACKEND=hash for an offline lexical fallback.") from exc
         self.name = f"fastembed:{model}"
         self.dim = len(next(iter(self.model.embed(["probe"]))))
 

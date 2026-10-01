@@ -19,6 +19,10 @@ jobs:
           python-version: ${{ matrix.python }}
       - run: pip install -r requirements.txt pymupdf numpy
       - run: python -m py_compile calibre_mcp.py
+      - name: semantic requirements install (no model download)
+        run: |
+          pip install -r requirements-semantic.txt
+          python -c "from fastembed import TextEmbedding; import numpy; print('semantic deps ok')"
       - run: python tests/make_fake_library.py
       - name: sync + status + smoke
         shell: bash

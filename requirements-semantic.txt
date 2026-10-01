@@ -1,0 +1,5 @@
+# Semantic search (calibre_search_semantic, similar_books method="semantic").
+# Installed by default by install.ps1; needs 64-bit Python (onnxruntime has no 32-bit Windows wheels).
+# Manual install:  .venv\Scripts\python.exe -m pip install -r requirements-semantic.txt
+numpy>=1.24
+fastembed>=0.4     # Apache-2.0; pulls onnxruntime, tokenizers, huggingface_hub (~28 packages, binary wheels)

@@ -4,7 +4,8 @@ defusedxml>=0.7    # hardened XML parsing for OPF/NCX of untrusted EPUBs
 # Optional PDF backend (only for PDFs not indexed by Calibre and page-range reading):
 #   pymupdf  -> fast, AGPL-3.0 (check licensing in a corporate context)
 #   pypdf    -> slow, BSD
-# Optional extras:
-#   numpy + fastembed -> opt-in semantic search (python calibre_mcp.py --build-embeddings)
+# Semantic search dependencies live in requirements-semantic.txt (installed by default by install.ps1;
+# kept separate so a platform without onnxruntime wheels, e.g. 32-bit Python, can still install the core).
+# Other optional extras:
 #   pymupdf4llm       -> Markdown output for PDF pages (AGPL-3.0)
 #   pillow            -> cover resizing (otherwise PyMuPDF is used if installed)

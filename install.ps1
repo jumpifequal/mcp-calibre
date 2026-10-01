@@ -16,9 +16,11 @@
 .PARAMETER SkipSync
   Skip the initial full-text index build.
 
-.PARAMETER Semantic
-  Also install the optional semantic-search dependencies (numpy, fastembed). The index itself is
-  built later, explicitly: .venv\Scripts\python.exe calibre_mcp.py --build-embeddings
+.PARAMETER NoSemantic
+  Skip the semantic-search dependencies (requirements-semantic.txt: numpy, fastembed, ~28 packages).
+  They are installed by default; the index itself is always built later, explicitly:
+  .venv\Scripts\python.exe calibre_mcp.py --build-embeddings
+  (-Semantic is still accepted for backward compatibility and has no effect.)
 
 .EXAMPLE
   powershell -ExecutionPolicy Bypass -File .\install.ps1 -Library "D:\Books\Calibre Library" -Pdf pymupdf -Register
@@ -29,7 +31,8 @@ param(
     [ValidateSet('pymupdf', 'pypdf', 'none')][string]$Pdf = 'pymupdf',
     [switch]$Register,
     [switch]$SkipSync,
-    [switch]$Semantic
+    [switch]$NoSemantic,
+    [switch]$Semantic   # deprecated: semantic deps are now the default
 )
 $ErrorActionPreference = 'Stop'
 
@@ -64,9 +67,20 @@ if (-not (Test-Path $py)) {
 & $py -m pip install --disable-pip-version-check -q --upgrade pip
 & $py -m pip install --disable-pip-version-check -q -r (Join-Path $here 'requirements.txt')
 if ($Pdf -ne 'none') { & $py -m pip install --disable-pip-version-check -q $Pdf }
-if ($Semantic) {
-    & $py -m pip install --disable-pip-version-check -q numpy fastembed
-    Write-Host "[+] Semantic search deps installed. Build the index when ready: $py $server --build-embeddings"
+if (-not $NoSemantic) {
+    # Non-blocking: a failure here must not break the core install.
+    $bits = & $py -c "import struct;print(struct.calcsize('P')*8)"
+    if ($bits -ne '64') {
+        Write-Warning "Semantic search skipped: it needs 64-bit Python (found $bits-bit; onnxruntime has no 32-bit wheels)."
+    } else {
+        & $py -m pip install --disable-pip-version-check -q -r (Join-Path $here 'requirements-semantic.txt')
+        if ($LASTEXITCODE -eq 0) {
+            Write-Host "[+] Semantic search deps installed. Build the index when ready (CPU heavy, resumable):"
+            Write-Host "    $py $server --build-embeddings --max-books 50"
+        } else {
+            Write-Warning "Semantic search deps failed to install; core server is fine. Retry: $py -m pip install -r requirements-semantic.txt"
+        }
+    }
 }
 Write-Host "[+] Dependencies installed (PDF backend: $Pdf)"
 
