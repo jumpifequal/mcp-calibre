@@ -237,6 +237,7 @@ All tools are read-only and accept an optional `library` argument when several l
 | `calibre_find_in_book` | Keyword-in-context search inside one book, paginated |
 | `calibre_get_toc` | EPUB TOC (nav/NCX → section indices) or PDF outline + page count |
 | `calibre_read_section` | One EPUB chapter or a PDF page range; `output="markdown"` keeps headings, lists, tables, code; image placeholders carry figure ids (`[image s3-2: alt]`) |
+| `calibre_show_images` | **Shows** covers and figures to the user inline in the chat (MCP Apps gallery); image data never enters the model's context |
 | `calibre_list_figures` | Figures of a book as a cheap text list: id, caption or alt text, chapter or page, size. EPUB, PDF, and other formats via a cached EPUB conversion |
 | `calibre_get_figure` | One figure as an image, resized; SVG rasterised |
 | `calibre_render_page` | A PDF page, or an area of it, as an image: for diagrams drawn as vectors, tables, formulas |
@@ -317,6 +318,32 @@ English passages); the model can pass the English translation in `alt_queries` f
 English-only and translating the query does not change that for Italian books.
 
 **Markdown for PDF pages.** `pip install pymupdf4llm` (AGPL-3.0). EPUB Markdown is built in.
+
+## Showing images in the chat
+
+Images returned by an ordinary MCP tool reach the model, but most clients show them only inside the folded
+tool-call block, and the model cannot reuse them in files. `calibre_show_images` displays covers and figures
+**to the user, inline in the conversation**, using the official MCP Apps extension (SEP-1865):
+
+- the tool declares an interface (`_meta.ui.resourceUri = ui://calibre-mcp/gallery`), a self-contained HTML
+  gallery that the client renders in a sandboxed frame inside the chat;
+- the images travel in `structuredContent`, which goes to the gallery and **not into the model's context**:
+  showing images costs no model tokens, and the model receives only a short text summary;
+- everything stays read-only: no files are written, the gallery has no network access (images are
+  `data:` URIs, allowed by the restrictive default CSP of the spec), and nothing leaves the machine.
+
+Example request to the assistant: "show me the covers of 1168 and 1164", or "show figure s3-2 of 1164".
+
+**Client support.** MCP Apps is supported by Claude (web and desktop) and ChatGPT, among others. A client
+without it shows only the text summary: the summary tells the model to retry with `also_for_model=true`,
+which also attaches small thumbnails for the model (inside the tool block, costing image tokens) so it can
+describe them. Rendering issues have been reported on some Claude Desktop for Windows builds; the fallback
+covers that case too.
+
+**Security of the view.** Captions and titles come from the books, so they are inserted as text, never as
+HTML; only PNG and JPEG data are rendered (SVG and anything else is dropped); the gallery accepts messages
+only from its parent frame and loads nothing external. These properties are tested in a real browser
+(`tests/test_gallery_browser.py`), including hostile captions and payloads.
 
 ## Semantic search model
 

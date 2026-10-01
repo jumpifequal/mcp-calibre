@@ -240,6 +240,7 @@ Tutti i tool sono in sola lettura e accettano un argomento opzionale `library` q
 | `calibre_find_in_book` | Ricerca keyword-in-context dentro un singolo libro, paginata |
 | `calibre_get_toc` | Indice EPUB (nav/NCX → indici di sezione) o outline PDF + numero di pagine |
 | `calibre_read_section` | Un capitolo EPUB o un intervallo di pagine PDF; `output="markdown"` mantiene heading, liste, tabelle, codice; i segnaposto delle immagini riportano l'id della figura (`[image s3-2: alt]`) |
+| `calibre_show_images` | **Mostra** copertine e figure all'utente in linea nella chat (galleria MCP Apps); i dati delle immagini non entrano mai nel contesto del modello |
 | `calibre_list_figures` | Figure di un libro come elenco testuale e leggero: id, didascalia o testo alternativo, capitolo o pagina, dimensioni. EPUB, PDF, e gli altri formati tramite una conversione EPUB in cache |
 | `calibre_get_figure` | Una figura come immagine, ridimensionata; gli SVG vengono rasterizzati |
 | `calibre_render_page` | Una pagina PDF, o una sua area, come immagine: per diagrammi vettoriali, tabelle, formule |
@@ -320,6 +321,34 @@ passaggi in inglese); il modello può passare la traduzione inglese in `alt_quer
 stemming è solo inglese, e tradurre la query non cambia nulla per i libri in italiano.
 
 **Markdown per le pagine PDF.** `pip install pymupdf4llm` (AGPL-3.0). Il Markdown per gli EPUB è integrato.
+
+## Mostrare le immagini nella chat
+
+Le immagini restituite da un normale tool MCP arrivano al modello, ma la maggior parte dei client le mostra
+solo dentro il blocco ripiegato della chiamata al tool, e il modello non può riusarle nei file.
+`calibre_show_images` mostra copertine e figure **all'utente, in linea nella conversazione**, usando
+l'estensione ufficiale MCP Apps (SEP-1865):
+
+- il tool dichiara un'interfaccia (`_meta.ui.resourceUri = ui://calibre-mcp/gallery`), una galleria HTML
+  autonoma che il client visualizza in un riquadro isolato (sandbox) dentro la chat;
+- le immagini viaggiano in `structuredContent`, che va alla galleria e **non nel contesto del modello**:
+  mostrare immagini non costa token, e il modello riceve solo un breve riepilogo testuale;
+- tutto resta in sola lettura: nessun file viene scritto, la galleria non ha accesso alla rete (le immagini
+  sono URI `data:`, ammessi dalla CSP restrittiva predefinita della specifica) e nulla esce dalla macchina.
+
+Esempio di richiesta all'assistente: "mostrami le copertine di 1168 e 1164", oppure "mostrami la figura s3-2
+di 1164".
+
+**Supporto dei client.** MCP Apps è supportato, tra gli altri, da Claude (web e desktop) e ChatGPT. Un client
+senza supporto mostra solo il riepilogo: il riepilogo indica al modello di riprovare con
+`also_for_model=true`, che allega anche piccole miniature per il modello (dentro il blocco del tool, con costo
+in token immagine) così può descriverle. Sono stati segnalati problemi di visualizzazione su alcune build di
+Claude Desktop per Windows; il fallback copre anche quel caso.
+
+**Sicurezza della vista.** Didascalie e titoli provengono dai libri, quindi vengono inseriti come testo, mai
+come HTML; vengono visualizzati solo dati PNG e JPEG (SVG e qualunque altro formato vengono scartati); la
+galleria accetta messaggi solo dal riquadro padre e non carica nulla dall'esterno. Queste proprietà sono
+verificate in un browser reale (`tests/test_gallery_browser.py`), con didascalie e payload ostili.
 
 ## Modello per la ricerca semantica
 

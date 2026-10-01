@@ -1,0 +1,189 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Calibre images</title>
+<style>
+  :root {
+    color-scheme: light dark;
+    --bg: var(--color-background-primary, #ffffff);
+    --bg2: var(--color-background-secondary, #f4f4f2);
+    --fg: var(--color-text-primary, #1f1f1f);
+    --fg2: var(--color-text-secondary, #5f5f5f);
+    --line: var(--color-border-tertiary, #e3e3e0);
+    --font: var(--font-sans, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: var(--color-background-primary, #1e1e1e);
+      --bg2: var(--color-background-secondary, #2a2a2a);
+      --fg: var(--color-text-primary, #ececec);
+      --fg2: var(--color-text-secondary, #a8a8a8);
+      --line: var(--color-border-tertiary, #3a3a3a);
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: var(--color-background-primary, #1e1e1e);
+    --bg2: var(--color-background-secondary, #2a2a2a);
+    --fg: var(--color-text-primary, #ececec);
+    --fg2: var(--color-text-secondary, #a8a8a8);
+    --line: var(--color-border-tertiary, #3a3a3a);
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; background: transparent; color: var(--fg); font-family: var(--font); }
+  body { padding: 4px 2px; }
+  h1 { font-size: 14px; font-weight: 600; margin: 0 0 10px; color: var(--fg2); }
+  .grid { display: grid; gap: 14px; grid-template-columns: repeat(auto-fill, minmax(var(--col, 220px), 1fr)); }
+  .grid.single { grid-template-columns: 1fr; }
+  figure { margin: 0; background: var(--bg2); border: 1px solid var(--line); border-radius: 10px; overflow: hidden;
+           display: flex; flex-direction: column; }
+  .frame { display: flex; align-items: center; justify-content: center; background: var(--bg); padding: 8px; }
+  img { display: block; max-width: 100%; height: auto; max-height: 520px; object-fit: contain; cursor: zoom-in; }
+  .single img { max-height: 760px; }
+  figcaption { padding: 8px 10px 10px; font-size: 12.5px; line-height: 1.4; overflow-wrap: anywhere; }
+  .t { font-weight: 600; }
+  .s { color: var(--fg2); margin-top: 2px; }
+  .err { color: var(--color-text-danger, #b42318); font-size: 12.5px; margin-top: 10px; }
+  .empty { color: var(--fg2); font-size: 13px; padding: 12px 2px; }
+  .zoom { position: fixed; inset: 0; background: rgba(0, 0, 0, .82); display: none; align-items: center;
+          justify-content: center; padding: 16px; cursor: zoom-out; }
+  .zoom.on { display: flex; }
+  .zoom img { max-height: 100%; max-width: 100%; cursor: zoom-out; }
+</style>
+</head>
+<body>
+<h1 id="title" hidden></h1>
+<div id="grid" class="grid"></div>
+<div id="msg" class="empty">Loading images…</div>
+<div id="errors" class="err" hidden></div>
+<div id="zoom" class="zoom" role="dialog" aria-label="Enlarged image"><img id="zimg" alt=""></div>
+<script>
+(() => {
+  "use strict";
+  // MCP Apps (SEP-1865) View, no SDK: JSON-RPC 2.0 over postMessage with the host.
+  const PROTOCOL = "2026-01-26";
+  const ALLOWED_MIME = new Set(["image/png", "image/jpeg"]);
+  let nextId = 1;
+  const pending = new Map();
+  const parentWin = window.parent;
+
+  function post(msg) { parentWin.postMessage(msg, "*"); }
+  function request(method, params) {
+    const id = nextId++;
+    post({ jsonrpc: "2.0", id, method, params });
+    return new Promise((resolve, reject) => pending.set(id, { resolve, reject }));
+  }
+  function notify(method, params) { post({ jsonrpc: "2.0", method, params: params || {} }); }
+
+  function applyHostContext(ctx) {
+    if (!ctx) return;
+    if (ctx.theme === "light" || ctx.theme === "dark") document.documentElement.dataset.theme = ctx.theme;
+    const vars = ctx.styles && ctx.styles.variables;
+    if (vars && typeof vars === "object") {
+      for (const [k, v] of Object.entries(vars)) {
+        if (/^--[a-z0-9-]+$/.test(k) && typeof v === "string" && v.length < 200) document.documentElement.style.setProperty(k, v);
+      }
+    }
+  }
+
+  function el(tag, cls, text) {
+    const e = document.createElement(tag);
+    if (cls) e.className = cls;
+    if (text != null) e.textContent = String(text);   // untrusted book data: text only, never HTML
+    return e;
+  }
+
+  function render(data) {
+    const grid = document.getElementById("grid");
+    const msg = document.getElementById("msg");
+    grid.textContent = "";
+    const imgs = Array.isArray(data && data.images) ? data.images : [];
+    if (data && data.title) { const h = document.getElementById("title"); h.textContent = String(data.title); h.hidden = false; }
+    let shown = 0;
+    for (const it of imgs) {
+      if (!it || !ALLOWED_MIME.has(it.mime) || typeof it.data !== "string" || !/^[A-Za-z0-9+/=]+$/.test(it.data)) continue;
+      const fig = el("figure");
+      const frame = el("div", "frame");
+      const img = el("img");
+      img.alt = String(it.alt || it.label || "image");
+      img.src = "data:" + it.mime + ";base64," + it.data;
+      if (it.width && it.height) { img.width = it.width; img.height = it.height; }
+      img.addEventListener("click", () => {
+        const z = document.getElementById("zoom");
+        document.getElementById("zimg").src = img.src;
+        z.classList.add("on");
+      });
+      frame.appendChild(img);
+      fig.appendChild(frame);
+      const cap = el("figcaption");
+      cap.appendChild(el("div", "t", it.label || ""));
+      if (it.sublabel) cap.appendChild(el("div", "s", it.sublabel));
+      fig.appendChild(cap);
+      grid.appendChild(fig);
+      shown++;
+    }
+    grid.classList.toggle("single", shown === 1);
+    msg.hidden = shown > 0;
+    if (!shown) msg.textContent = "No image to display.";
+    const errs = Array.isArray(data && data.errors) ? data.errors : [];
+    const eb = document.getElementById("errors");
+    eb.textContent = errs.map(e => "• " + String(e)).join("\n");
+    eb.style.whiteSpace = "pre-line";
+    eb.hidden = !errs.length;
+    reportSize();
+  }
+
+  document.getElementById("zoom").addEventListener("click", () => document.getElementById("zoom").classList.remove("on"));
+
+  let lastH = 0, lastW = 0, ready = false;   // no notifications before the ui/initialize handshake completes
+  function reportSize() {
+    if (!ready) return;
+    const h = Math.ceil(document.documentElement.scrollHeight);
+    const w = Math.ceil(document.documentElement.scrollWidth);
+    if (h !== lastH || w !== lastW) { lastH = h; lastW = w; notify("ui/notifications/size-changed", { width: w, height: h }); }
+  }
+  new ResizeObserver(reportSize).observe(document.body);
+  window.addEventListener("load", reportSize);
+
+  window.addEventListener("message", (ev) => {
+    if (ev.source !== parentWin) return;                 // only the host frame talks to us
+    const m = ev.data;
+    if (!m || m.jsonrpc !== "2.0") return;
+    if (m.id != null && !m.method) {                      // response to one of our requests
+      const p = pending.get(m.id);
+      if (!p) return;
+      pending.delete(m.id);
+      m.error ? p.reject(new Error(m.error.message || "host error")) : p.resolve(m.result);
+      return;
+    }
+    if (m.method === "ui/notifications/tool-result") {
+      const r = m.params || {};
+      render(r.structuredContent || {});
+    } else if (m.method === "ui/notifications/host-context-changed") {
+      applyHostContext(m.params);
+    } else if (m.method === "ui/notifications/tool-cancelled") {
+      document.getElementById("msg").textContent = "Cancelled.";
+      reportSize();
+    } else if (m.id != null && m.method) {               // host -> view requests
+      if (m.method === "ui/resource-teardown" || m.method === "ping") post({ jsonrpc: "2.0", id: m.id, result: {} });
+      else post({ jsonrpc: "2.0", id: m.id, error: { code: -32601, message: "Method not found" } });
+    }
+  });
+
+  request("ui/initialize", {
+    appInfo: { name: "calibre-mcp-gallery", version: "1.0.0" },
+    appCapabilities: { availableDisplayModes: ["inline"] },
+    protocolVersion: PROTOCOL,
+  }).then((res) => {
+    applyHostContext(res && res.hostContext);
+    notify("ui/notifications/initialized", {});
+    ready = true;
+    reportSize();
+  }).catch(() => {
+    document.getElementById("msg").textContent = "This client cannot display MCP App views.";
+  });
+})();
+</script>
+</body>
+</html>
