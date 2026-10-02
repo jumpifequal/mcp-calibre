@@ -75,7 +75,10 @@ from typing import Annotated, Any, Iterator, Literal, Optional
 from pydantic import BaseModel, Field
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))  # bundled package next to this file
-from mcpcalibre import figures, highlight, htmlmd, semantic  # noqa: E402
+from mcpcalibre import figures, highlight, htmlmd, semantic, structure  # noqa: E402
+from mcpcalibre import isbn as isbnmod  # noqa: E402
+from mcpcalibre import legalgate, quality  # noqa: E402
+from mcpcalibre import figindex  # noqa: E402
 from mcpcalibre import query as cql  # noqa: E402
 
 try:  # hardened XML parsing if available (OPF/NCX come from untrusted ebooks)
@@ -93,7 +96,7 @@ except ImportError:  # SDK v1
     from mcp.server.fastmcp.exceptions import ToolError  # type: ignore
 from mcp.types import CallToolResult, ImageContent, TextContent, ToolAnnotations
 
-__version__ = "4.3.0"
+__version__ = "5.0.0"
 
 # --------------------------------------------------------------------------- config
 FORMAT_PREF = ["EPUB", "KEPUB", "AZW3", "AZW", "MOBI", "FB2", "DOCX", "HTMLZ",
@@ -547,6 +550,7 @@ class Library:
         self.side_dir.mkdir(parents=True, exist_ok=True)
         self.index = SideIndex(self)
         self.semantic = semantic.SemanticIndex(self.side_dir)
+        self.figindex = figindex.FigureIndex(self.side_dir)
         self.lib_id = "_hex_-" + self.root.name.encode("utf-8").hex().upper()
         self.name = self.root.name
         self.notes_db = self.root / ".calnotes" / "notes.db"
@@ -1240,7 +1244,8 @@ INSTRUCTIONS = (
     "multilingual; pass the English translation in alt_queries for extra recall. Figures: "
     "calibre_list_figures, then calibre_get_figure or calibre_render_page (PDF vector diagrams). "
     "To SHOW covers or figures to the user, call calibre_show_images: it renders them inline in the "
-    "chat (not in the folded tool call) and costs no model tokens."
+    "chat (not in the folded tool call) and costs no model tokens. Chapters of any format: "
+    "calibre_get_chapters. Before sharing notes derived from books, run calibre_check_overlap."
 )
 
 mcp = _Server("calibre_mcp", instructions=INSTRUCTIONS)
@@ -1446,19 +1451,33 @@ def calibre_read_text(
     max_chars: Annotated[int, Field(ge=200, le=50000)] = 6000,
     format: Annotated[Optional[str], Field(description="Text source format; default = best available")] = None,
     center: Annotated[bool, Field(description="If true, centre the window on offset instead of starting at it")] = False,
+    chapter: Annotated[Optional[int], Field(ge=0, description="Start at this chapter (index from calibre_get_chapters)")] = None,
 ) -> dict[str, Any]:
-    """Read a window of a book's plain text. Paginate with next_offset. Hard cap CALIBRE_MCP_MAX_CHARS."""
-    text, fmt, src = LIB.text_for(book_id, format)
+    """Read a window of a book's plain text. Paginate with next_offset. Hard cap CALIBRE_MCP_MAX_CHARS.
+    With chapter=N, reading starts at that chapter and next_offset stops at its end."""
+    chap = None
+    if chapter is not None:
+        cmap, text, fmt, src = book_chapters(book_id, format)
+        if chapter >= len(cmap["chapters"]):
+            raise ValueError(f"chapter out of range (0..{len(cmap['chapters']) - 1})")
+        chap = cmap["chapters"][chapter]
+        offset = max(offset, chap["offset"]) if offset else chap["offset"]
+    else:
+        text, fmt, src = LIB.text_for(book_id, format)
     n = min(max_chars, MAX_CHARS)
     start = max(0, offset - n // 2) if center else offset
     if start >= len(text):
         raise ValueError(f"offset beyond end of text ({len(text)} chars)")
-    end = min(len(text), start + n)
-    if end < len(text):  # cut on whitespace
+    limit = chap["end"] if chap else len(text)
+    end = min(limit, start + n)
+    if end < limit:  # cut on whitespace
         sp = text.rfind(" ", start + n // 2, end)
         end = sp if sp > 0 else end
-    return {"book_id": book_id, "format": fmt, "source": src, "offset": start, "total_chars": len(text),
-            "next_offset": end if end < len(text) else None, "text": text[start:end]}
+    res = {"book_id": book_id, "format": fmt, "source": src, "offset": start, "total_chars": len(text),
+           "next_offset": end if end < limit else None, "text": text[start:end]}
+    if chap:
+        res.update(chapter=chap["index"], chapter_title=chap["title"], chapter_end=chap["end"])
+    return res
 
 
 @tool("calibre_find_in_book")
@@ -1747,6 +1766,44 @@ def calibre_show_images(
                   "lacks MCP Apps support: retry with also_for_model=true and describe them."))
     return CallToolResult(content=[TextContent(type="text", text=summary), *model_imgs],
                           structuredContent={"title": title, "images": items, "errors": errors})
+
+
+_CHAPTER_CACHE: dict[tuple, dict] = {}
+
+
+def book_chapters(book_id: int, fmt: Optional[str] = None) -> tuple[dict, str, str, str]:
+    """(chapter map, text, format, source). Uses the book's own TOC (EPUB nav/NCX, PDF outline) when
+    it can be located in the text; heading detection otherwise. Offsets match calibre_read_text."""
+    text, f, src = LIB.text_for(book_id, fmt)
+    key = (str(LIB.root), book_id, f, len(text), hash(text[:2000]), hash(text[-2000:]))
+    if key in _CHAPTER_CACHE:
+        return _CHAPTER_CACHE[key], text, f, src
+    titles: Optional[list[str]] = None
+    with contextlib.suppress(ValueError, OSError, zipfile.BadZipFile, ET.ParseError, RuntimeError):
+        if f in ("EPUB", "KEPUB"):
+            p = LIB.format_path(book_id, f)
+            st = p.stat()
+            titles = [t["title"] for t in parse_epub(str(p), st.st_mtime, st.st_size)["toc"] if t.get("title")]
+        elif f == "PDF" and _pdf_backend()[0]:
+            titles = [t["title"] for t in pdf_info(str(LIB.format_path(book_id, f)))["toc"] if t.get("title")]
+    cmap = structure.chapter_map(text, fold, titles)
+    if len(_CHAPTER_CACHE) > 64:
+        _CHAPTER_CACHE.clear()
+    _CHAPTER_CACHE[key] = cmap
+    return cmap, text, f, src
+
+
+@tool("calibre_get_chapters")
+def calibre_get_chapters(
+    book_id: Annotated[int, Field(ge=1)],
+    format: Annotated[Optional[str], Field(description="Text source format; default = best available")] = None,
+) -> dict[str, Any]:
+    """Chapter map for ANY format (LIT, MOBI, PDF without outline included): titles, offsets, length and
+    kind (body / front matter / back matter). Built from the book's own TOC when possible, else from
+    headings detected in the text. Read a chapter with calibre_read_text(book_id, chapter=N)."""
+    cmap, text, f, src = book_chapters(book_id, format)
+    return {"book_id": book_id, "format": f, "source": src, "method": cmap["method"], "total_chars": len(text),
+            "chapters": [{k: c[k] for k in ("index", "title", "kind", "offset", "chars")} for c in cmap["chapters"]]}
 
 
 @tool("calibre_list_facets")
@@ -2055,9 +2112,177 @@ def calibre_find_duplicates(
             split += list(vols.values()) + [free]
     dup = sorted((g for g in split if len(set(g)) > 1), key=len, reverse=True)[:limit]
     meta = {b["id"]: b for b in LIB.describe(sorted({i for g in dup for i in g}))}
-    return {"groups": len(dup), "mode": "loose" if loose else "strict", "duplicates": [
-        [{k: meta[i].get(k) for k in ("id", "title", "authors", "series", "formats", "added")}
-         for i in sorted(set(g)) if i in meta] for g in dup]}
+    groups_out = [[{k: meta[i].get(k) for k in ("id", "title", "authors", "series", "languages", "formats", "added")}
+                   for i in sorted(set(g)) if i in meta] for g in dup]
+    notes = []
+    for gi, g in enumerate(groups_out):
+        langs = {tuple(b.get("languages") or []) for b in g if b.get("languages")}
+        if len(langs) > 1:  # same work in different languages: a translation, not a duplicate to remove
+            notes.append({"group": gi, "likely_translations": True,
+                          "languages": sorted({x for t in langs for x in t})})
+    res = {"groups": len(dup), "mode": "loose" if loose else "strict", "duplicates": groups_out}
+    if notes:
+        res["group_notes"] = notes
+    res["next_step"] = "calibre_compare_books(book_ids=[...]) compares a group field by field and suggests which to keep"
+    return res
+
+
+@tool("calibre_compare_books")
+def calibre_compare_books(
+    book_ids: Annotated[list[int], Field(min_length=2, max_length=10, description="Books to compare, e.g. a duplicate group")],
+) -> dict[str, Any]:
+    """Field-by-field comparison of possible duplicates, with a suggestion of which record to keep
+    (more formats, richer metadata, extracted text). Read-only: merge or delete in Calibre."""
+    books = LIB.describe(book_ids, full=True)
+    if len(books) < 2:
+        raise ValueError("Need at least two existing books")
+    with LIB.calibre_fts() as f:
+        texts = {}
+        if f is not None:
+            for b in books:
+                texts[b["id"]] = sum(r[0] for r in f.execute("SELECT text_size FROM books_text WHERE book=?", (b["id"],)))
+    fields = ["title", "authors", "series", "languages", "publisher", "published", "rating", "tags", "identifiers",
+              "formats", "has_cover", "added"]
+    rows, differs = [], []
+    for fld in fields:
+        vals = {b["id"]: b.get(fld) for b in books}
+        norm = {json.dumps(v, sort_keys=True, default=str) for v in vals.values()}
+        if len(norm) > 1:
+            differs.append(fld)
+        rows.append({"field": fld, "values": vals, "same": len(norm) == 1})
+    def score(b: dict) -> float:
+        fm = [x["format"] if isinstance(x, dict) else x for x in b.get("formats") or []]
+        s = 3.0 * len(fm) + (2 if "EPUB" in fm else 0) + (1.5 if b.get("description") else 0)
+        s += 1.5 * len(b.get("identifiers") or {}) + (1 if b.get("has_cover") else 0) + 0.3 * len(b.get("tags") or [])
+        s += (2 if texts.get(b["id"]) else 0) + (0.5 if b.get("published") else 0) + (0.5 if b.get("rating") else 0)
+        return s
+    ranked = sorted(books, key=score, reverse=True)
+    langs = {tuple(b.get("languages") or []) for b in books if b.get("languages")}
+    out = {"books": [{"id": b["id"], "title": b.get("title"), "keep_score": round(score(b), 1),
+                      "text_chars": texts.get(b["id"], 0)} for b in ranked],
+           "differences": [r for r in rows if not r["same"]], "same_fields": [r["field"] for r in rows if r["same"]],
+           "suggestion": f"keep {ranked[0]['id']} ({ranked[0].get('title')}); move any extra formats or metadata "
+                         "from the others before deleting them in Calibre"}
+    if len(langs) > 1:
+        out["warning"] = ("Different languages: probably translations of the same work, not duplicates. "
+                          "Keep both unless you only want one language.")
+        out["suggestion"] = "probably translations: keep both"
+    return out
+
+
+@tool("calibre_quality_report")
+def calibre_quality_report(
+    checks: Annotated[Optional[list[str]], Field(description=(
+        "Subset of checks; default all. Per book: " + ", ".join(quality.BOOK_CHECKS) +
+        ". Library-wide: " + ", ".join(quality.LIBRARY_CHECKS)))] = None,
+    query: Annotated[Optional[str], Field(description="Calibre search syntax restricting the audited books")] = None,
+    virtual_library: Optional[str] = None,
+    limit: Annotated[int, Field(ge=1, le=500, description="Max per-book issues returned")] = 100,
+    offset: Annotated[int, Field(ge=0)] = 0,
+) -> dict[str, Any]:
+    """Audit metadata quality: missing fields, titles that are file names, invalid ISBNs, author name
+    anomalies (| ; digits, inverted names), unsorted author sort, the same author or tag written
+    differently, and gaps in series numbering. Read-only: fix the findings in Calibre."""
+    scope = None
+    if query or virtual_library:
+        scope = LIB.filter_ids(query=query, virtual_library=virtual_library, limit=None)[1]
+    with LIB.meta() as c:
+        rep_ = quality.audit(c, fold, scope, checks)
+    issues = rep_.pop("book_issues")
+    rep_["book_issues"] = issues[offset:offset + limit]
+    rep_["book_issues_total"] = len(issues)
+    rep_["next_offset"] = offset + limit if offset + limit < len(issues) else None
+    return rep_
+
+
+@tool("calibre_find_isbn")
+def calibre_find_isbn(
+    book_id: Annotated[int, Field(ge=1)],
+    format: Annotated[Optional[str], Field(description="Text source format; default = best available")] = None,
+) -> dict[str, Any]:
+    """Look for the book's ISBN in its own text (copyright page first; ISBNs cited in the body are
+    ranked lower). Only checksum-valid ISBNs are returned, compared with the ISBN stored in Calibre.
+    Read-only: add or fix the identifier in Calibre."""
+    text, f, src = LIB.text_for(book_id, format)
+    found = isbnmod.scan(text)
+    b = (LIB.describe([book_id], full=True) or [{}])[0]
+    stored = (b.get("identifiers") or {}).get("isbn")
+    stored13 = isbnmod.to13(stored) if stored else None
+    for h in found:
+        h["matches_stored"] = bool(stored13) and h["isbn13"] == stored13
+    out: dict[str, Any] = {"book_id": book_id, "title": b.get("title"), "format": f,
+                           "stored_isbn": stored, "candidates": found[:10]}
+    if stored:
+        out["stored_valid"] = isbnmod.check(stored)["valid"]
+    if not found:
+        out["verdict"] = "no valid ISBN found in the text"
+    elif stored13 and found[0]["isbn13"] == stored13:
+        out["verdict"] = "stored ISBN confirmed by the book's own text"
+    elif stored13 and any(h["matches_stored"] for h in found):
+        out["verdict"] = "stored ISBN appears in the text, but another ISBN ranks higher: check the copyright page"
+    else:
+        out["verdict"] = (f"suggested ISBN: {found[0]['isbn13']}" + (" (labelled 'ISBN')" if found[0]["labeled"] else "")
+                          + ("; the stored one differs" if stored else ""))
+    return out
+
+
+@tool("calibre_search_figures")
+def calibre_search_figures(
+    query: Annotated[str, Field(min_length=2, max_length=500, description="What the figure shows, e.g. 'agent loop diagram'")],
+    alt_queries: Annotated[Optional[list[str]], Field(max_length=3, description="Translations or paraphrases")] = None,
+    limit: Annotated[int, Field(ge=1, le=50)] = 12,
+    query_filter: Annotated[Optional[str], Field(description="Calibre search syntax restricting candidate books")] = None,
+    virtual_library: Optional[str] = None,
+) -> dict[str, Any]:
+    """Find figures across the library by their caption and alt text (keyword, plus meaning when the
+    figure index was built with the semantic model). Build the index with: calibre_mcp.py
+    --index-figures. Show results with calibre_show_images; 'pN-render' ids are vector drawings:
+    use calibre_render_page on that page."""
+    allowed = None
+    if query_filter or virtual_library:
+        allowed = set(LIB.filter_ids(query=query_filter, virtual_library=virtual_library, limit=None)[1])
+    queries = [query, *[q for q in (alt_queries or []) if q and q.strip()]]
+    qvecs = None
+    info = LIB.figindex.info()
+    if info.get("with_vectors"):
+        with contextlib.suppress(ValueError):
+            emb = semantic.get_embedder(fold)
+            if emb.name == info.get("backend"):
+                qvecs = list(emb.embed(queries))
+    hits = LIB.figindex.search(semantic.keyword_match(queries, fold), qvecs, allowed, limit)
+    titles = {b["id"]: b.get("title") for b in LIB.describe(sorted({h["book_id"] for h in hits}))}
+    for h in hits:
+        h["title"] = titles.get(h["book_id"])
+        if h["figure_id"].endswith("-render"):
+            h["view_with"] = {"tool": "calibre_render_page", "book_id": h["book_id"], "page": int(h["figure_id"][1:].split("-")[0])}
+        else:
+            h["view_with"] = {"tool": "calibre_show_images", "images": [{"book_id": h["book_id"], "image": h["figure_id"]}]}
+    return {"count": len(hits), "mode": "hybrid" if qvecs is not None else "keyword", "results": hits}
+
+
+@tool("calibre_check_overlap")
+def calibre_check_overlap(
+    text: Annotated[str, Field(min_length=50, max_length=200_000, description="Notes, summary or skill text to check")],
+    book_ids: Annotated[list[int], Field(min_length=1, max_length=12, description="Source books the text was derived from")],
+    max_overlap: Annotated[Optional[float], Field(ge=0, le=1)] = None,
+    max_run_words: Annotated[Optional[int], Field(ge=8, le=200)] = None,
+    max_quote_words: Annotated[Optional[int], Field(ge=1, le=200)] = None,
+    max_ratio: Annotated[Optional[float], Field(ge=0, le=1)] = None,
+) -> dict[str, Any]:
+    """Legal gate: checks mechanically that a text derived from books does not reproduce them
+    (verbatim 8-word overlap, longest copied run, quote budget, compression, chapter-title mirroring,
+    attribution). Run it before sharing notes or a distilled skill. Evidence, not legal advice."""
+    sources = [_gate_source(b) for b in book_ids]
+    return legalgate.check(text, sources, fold, max_overlap=max_overlap, max_run_words=max_run_words,
+                           max_quote_words=max_quote_words, max_ratio=max_ratio)
+
+
+def _gate_source(book_id: int) -> dict[str, Any]:
+    cmap, text, _f, _src = book_chapters(book_id)
+    b = (LIB.describe([book_id], full=True) or [{}])[0]
+    return {"book_id": book_id, "title": b.get("title"), "authors": b.get("authors") or [],
+            "isbn": (b.get("identifiers") or {}).get("isbn"), "text": text,
+            "chapters": [c["title"] for c in cmap["chapters"] if c.get("title") and c["kind"] == "body"]}
 
 
 @tool("calibre_similar_books")
@@ -2152,19 +2377,7 @@ def _content_similar(book_id: int, limit: int, sample: int = 60000, n_terms: int
 
 
 def _semantic_similar(book_id: int, limit: int) -> list[tuple[int, float]]:
-    import numpy as np  # semantic index present implies numpy installed
-    mat, ids = LIB.semantic._matrix()
-    rows = [i for i, x in enumerate(ids) if x[0] == book_id]
-    if not rows:
-        raise ValueError(f"Book {book_id} is not in the embedding index (run --build-embeddings)")
-    centroid = mat[rows].astype(np.float32).mean(axis=0)
-    centroid /= (np.linalg.norm(centroid) or 1)
-    scores = mat.astype(np.float32) @ centroid
-    best: dict[int, float] = {}
-    for i, sc in enumerate(scores):
-        b = ids[i][0]
-        if b != book_id and sc > best.get(b, -1):
-            best[b] = float(sc)
+    best = LIB.semantic.book_centroids(book_id)
     return sorted(best.items(), key=lambda x: -x[1])[:limit]
 
 
@@ -2173,50 +2386,64 @@ def calibre_search_semantic(
     query: Annotated[str, Field(min_length=2, max_length=1000, description="Natural-language question or concept")],
     alt_queries: Annotated[Optional[list[str]], Field(max_length=3, description=(
         "Optional paraphrases or translations of the same question (e.g. the English version of an "
-        "Italian question). Results are fused: each passage keeps its best score."))] = None,
-    limit: Annotated[int, Field(ge=1, le=30, description="Max books")] = 8,
+        "Italian question). Used by both the vector and the keyword half."))] = None,
+    mode: Annotated[Literal["hybrid", "vector", "keyword"], Field(description=(
+        "hybrid (default): meaning + exact terms fused by reciprocal rank fusion; vector: meaning only; "
+        "keyword: exact terms over the indexed passages"))] = "hybrid",
+    book_id: Annotated[Optional[int], Field(ge=1, description="Search inside ONE book: ranked passages")] = None,
+    limit: Annotated[int, Field(ge=1, le=30, description="Max books (or passages with book_id)")] = 8,
     chunks_per_book: Annotated[int, Field(ge=1, le=5)] = 2,
     snippet_chars: Annotated[int, Field(ge=100, le=2000)] = 500,
     query_filter: Annotated[Optional[str], Field(description="Calibre search syntax restricting candidates")] = None,
     virtual_library: Optional[str] = None,
 ) -> dict[str, Any]:
-    """Meaning-based search over book content (finds passages that discuss a concept even without the
-    exact words). The model is multilingual: an Italian question also finds English passages.
-    Requires the opt-in embedding index (python calibre_mcp.py --build-embeddings).
-    Snippet offsets work with calibre_read_text(book_id, format, offset, center=true)."""
+    """Meaning-based search over book content: finds passages that discuss a concept even without the
+    exact words, and (hybrid) also exact terms such as names, ids or code. Multilingual: an Italian
+    question also finds English passages. Each passage carries its chapter; front/back matter
+    (contents, praise, index) is demoted and labelled; weak matches are flagged low_confidence.
+    Requires the opt-in index (python calibre_mcp.py --build-embeddings). Offsets work with
+    calibre_read_text(book_id, format, offset, center=true)."""
     allowed = None
     if query_filter or virtual_library:
         allowed = set(LIB.filter_ids(query=query_filter, virtual_library=virtual_library, limit=None)[1])
-    k = limit * chunks_per_book * 6
-    fused: dict[tuple[int, str, int], float] = {}
-    for q in [query, *[a for a in (alt_queries or []) if a and a.strip() and a != query]]:
-        for book, fmt, off, sc in LIB.semantic.search(q, fold, k=k, allowed=allowed):
-            key = (book, fmt, off)
-            if sc > fused.get(key, -1e9):
-                fused[key] = sc
-    hits = sorted(((b, f, o, sc) for (b, f, o), sc in fused.items()), key=lambda h: -h[3])[:k]
-    per_book: dict[int, list[tuple[str, int, float]]] = {}
-    for book, fmt, off, sc in hits:
-        lst = per_book.setdefault(book, [])
-        if len(lst) < chunks_per_book and all(abs(off - o) > semantic.CHUNK // 2 for _, o, _ in lst):
-            lst.append((fmt, off, sc))
-        if len(per_book) >= limit and all(len(v) >= chunks_per_book for v in per_book.values()):
+    per = limit if book_id else chunks_per_book
+    hits = LIB.semantic.search(query, fold, k=max(limit * per * 6, 60), allowed=allowed, mode=mode,
+                               alt_queries=alt_queries, book=book_id)
+    per_book: dict[int, list[dict]] = {}
+    for h in hits:
+        lst = per_book.setdefault(h["book"], [])
+        if len(lst) < per and all(abs(h["off"] - x["off"]) > semantic.CHUNK // 2 for x in lst):
+            lst.append(h)
+        if not book_id and len(per_book) >= limit and all(len(v) >= per for v in per_book.values()):
             break
     books = list(per_book)[:limit]
     meta = {b["id"]: b for b in LIB.describe(books)}
-    results = []
+    results, weak = [], 0
     for b in books:
         passages = []
-        for fmt, off, sc in per_book[b]:
+        for h in per_book[b]:
             try:
-                text = LIB.text_for(b, fmt)[0]
+                text = LIB.text_for(b, h["fmt"])[0]
             except ValueError:
                 continue
-            frag = " ".join(text[off:off + snippet_chars].split())
-            passages.append({"format": fmt, "offset": off, "score": round(sc, 3), "text": frag + "…"})
+            frag = " ".join(text[h["off"]:h["off"] + snippet_chars].split())
+            p = {"format": h["fmt"], "offset": h["off"], "chapter": h["heading"], "score": round(h["score"], 4),
+                 "similarity": None if h["vector"] is None else round(h["vector"], 3),
+                 "keyword_match": h["keyword_rank"] is not None, "text": frag + "…"}
+            if h["kind"] != "body":
+                p["section"] = f"[{h['kind']} matter]"
+            if h["low_confidence"]:
+                p["low_confidence"] = True
+                weak += 1
+            passages.append(p)
         results.append({"book_id": b, "title": meta.get(b, {}).get("title"),
                         "authors": meta.get(b, {}).get("authors"), "passages": passages})
-    return {"count": len(results), "results": results}
+    out: dict[str, Any] = {"mode": mode, "count": len(results), "results": results}
+    total = sum(len(r["passages"]) for r in results)
+    if total and weak == total:
+        out["note"] = ("All matches are weak (below the similarity floor, no keyword match): the library may "
+                       "not discuss this, or the relevant books are not in the semantic index yet.")
+    return out
 
 
 @tool("calibre_library_status")
@@ -2253,6 +2480,7 @@ def status() -> dict[str, Any]:
         "notes_db": LIB.notes_db.is_file(),
         "stemming": STEMMING,
         "semantic_index": LIB.semantic.info(),
+        "figure_index": LIB.figindex.info(),
         "markdown_pdf": _has_module("pymupdf4llm"),
         "libraries": list(LIBS),
     }
@@ -2262,6 +2490,61 @@ def status() -> dict[str, Any]:
 def _has_module(name: str) -> bool:
     import importlib.util
     return importlib.util.find_spec(name) is not None
+
+
+def index_figures(max_books: int = 0) -> None:
+    """Explicit batch: captions/alt text of EPUB and PDF figures -> figures.db (incremental)."""
+    with LIB.meta() as c:
+        rows = c.execute("SELECT book, format FROM data ORDER BY book").fetchall()
+    pick: dict[int, str] = {}
+    for b, f in rows:          # EPUB preferred over PDF; other formats would need a conversion per book
+        f = f.upper()
+        if f in ("EPUB", "KEPUB") and pick.get(b) not in ("EPUB",):
+            pick[b] = f
+        elif f == "PDF" and b not in pick:
+            pick[b] = f
+    sources = []
+    for b, f in pick.items():
+        with contextlib.suppress(ValueError, OSError):
+            st = LIB.format_path(b, f).stat()
+            sources.append((b, f, f"{st.st_mtime:.0f}-{st.st_size}"))
+
+    def list_figs(book: int, fmt: str) -> list[dict]:
+        if fmt == "PDF":
+            p = str(LIB.format_path(book, fmt))
+            n = pdf_info(p)["page_count"]
+            return [{"fig_id": x["id"], "caption": x.get("caption"), "alt": None, "place": f"page {x['page']}"}
+                    for x in figures.pdf_figures(p, 1, n)]
+        figs, secs = _epub_figs(LIB.format_path(book, fmt))
+        return [{"fig_id": x["id"], "caption": x.get("caption"), "alt": x.get("alt"),
+                 "place": secs[x["section"]]["title"] if x["section"] < len(secs) else None}
+                for x in figs if x.get("available")]
+    embed, backend = None, None
+    try:
+        emb = semantic.get_embedder(fold)
+        embed, backend = emb.embed, emb.name
+    except ValueError as exc:
+        print(f"note: captions indexed for keyword search only ({exc})", file=sys.stderr)
+    res = LIB.figindex.build(sources, list_figs, embed, backend, max_books, progress=lambda m: print(m, file=sys.stderr))
+    print(json.dumps(res, indent=2))
+
+
+def legal_gate_cli(folder: str, book_ids: list[int]) -> int:
+    """Check every .md/.txt file of a folder (e.g. a distilled skill) against its source books."""
+    if not book_ids:
+        print("ERROR: pass the source books with --book ID (repeatable)", file=sys.stderr)
+        return 2
+    root = Path(folder)
+    files = sorted(p for p in root.rglob("*") if p.suffix.lower() in (".md", ".txt", ".yaml", ".yml") and p.is_file())
+    if not files:
+        print(f"ERROR: no .md/.txt files under {root}", file=sys.stderr)
+        return 2
+    text = "\n\n".join(p.read_text("utf-8", errors="replace") for p in files)
+    rep_ = legalgate.check(text, [_gate_source(b) for b in book_ids], fold)
+    for name, c in rep_["checks"].items():
+        print(f"{'PASS' if c['pass'] else 'FAIL'}  {name:18s} {json.dumps(c.get('value'))}  {c.get('detail', '')}")
+    print(("PASS" if rep_["pass"] else "FAIL") + f"  ({len(files)} files, {rep_['words']} words) - {rep_['note']}")
+    return 0 if rep_["pass"] else 1
 
 
 def build_embeddings(max_books: int = 0, rebuild: bool = False) -> None:
@@ -2275,7 +2558,12 @@ def build_embeddings(max_books: int = 0, rebuild: bool = False) -> None:
         if cur is None or (rid > 0, -_fmt_rank(fmt)) > (cur[2] > 0, -_fmt_rank(cur[0])):
             best[book] = (fmt, h, rid)
     sources = [(b, f, h) for b, (f, h, _) in best.items()]
-    res = LIB.semantic.build(sources, lambda b, f: LIB.text_for(b, f)[0], fold, max_books=max_books,
+
+    def prepare(book: int, fmt: str) -> tuple[str, str, str, list[dict]]:
+        cmap, text, _f, _src = book_chapters(book, fmt)
+        d = (LIB.describe([book]) or [{}])[0]
+        return text, d.get("title") or "", ", ".join(d.get("authors") or []), cmap["chapters"]
+    res = LIB.semantic.build(sources, prepare, fold, max_books=max_books,
                              rebuild=rebuild, progress=lambda m: print(m, file=sys.stderr))
     print(json.dumps(res, indent=2))
 
@@ -2491,6 +2779,10 @@ def main() -> None:
     ap.add_argument("--build-embeddings", action="store_true",
                     help="Build/refresh the opt-in semantic index (CPU heavy, incremental), then exit")
     ap.add_argument("--rebuild", action="store_true", help="With --build-embeddings: discard and rebuild")
+    ap.add_argument("--index-figures", action="store_true",
+                    help="Build/refresh the figure-caption index for calibre_search_figures, then exit")
+    ap.add_argument("--legal-gate", metavar="DIR", help="Check a skill/notes folder against --book sources, then exit")
+    ap.add_argument("--book", type=int, action="append", help="Source book id for --legal-gate (repeatable)")
     ap.add_argument("--download-model", action="store_true",
                     help="Download the semantic-search model into the local cache (used by setup), then exit")
     ap.add_argument("--transport", choices=["stdio", "http"], default="stdio")
@@ -2524,6 +2816,11 @@ def main() -> None:
     if a.extract_missing:
         extract_missing(a.max_books)
         return
+    if a.index_figures:
+        index_figures(a.max_books)
+        return
+    if a.legal_gate:
+        raise SystemExit(legal_gate_cli(a.legal_gate, a.book or []))
     if a.build_embeddings:
         try:
             build_embeddings(a.max_books, a.rebuild)

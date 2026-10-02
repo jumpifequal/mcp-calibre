@@ -1,5 +1,23 @@
 # Changelog
 
+**5.0.0 - Library curation, hybrid semantic search and book distillation**
+
+- add: calibre_quality_report — audits metadata: missing fields, file-name titles, invalid ISBNs, author name anomalies, unsorted author sort, author and tag variants, series gaps.
+- add: calibre_search_semantic — hybrid search (default) fuses meaning and exact terms; `mode` selects hybrid, vector or keyword.
+- add: calibre_search_semantic — `book_id` returns ranked passages inside one book, each with its chapter.
+- change: semantic index — passages follow chapter boundaries, carry title, author and chapter as context, and cover the whole book (up to 1,500 passages).
+- change: semantic index — the format changed; run `--build-embeddings` once to rebuild it, and the server reports an old index until then.
+- add: calibre_search_semantic — front and back matter is demoted and labelled, and weak matches are flagged `low_confidence`.
+- add: calibre_get_chapters — chapter map for every format, from the book's own TOC or from headings detected in the text.
+- add: calibre_read_text — `chapter` reads one chapter and stops at its end.
+- add: calibre_search_figures — finds figures across the library by caption and alt text; build the index with `--index-figures`.
+- add: calibre_find_isbn — finds and validates the book's ISBN in its own text and compares it with the stored one.
+- add: calibre_compare_books — compares possible duplicates field by field and suggests which record to keep.
+- add: calibre_find_duplicates — groups whose books are in different languages are flagged as likely translations.
+- add: calibre_check_overlap and `--legal-gate` — check that notes derived from books do not reproduce them.
+- add: companion skills calibre-distill (one book) and calibre-distill-topic (one topic across several books).
+- add: documentation — architecture section (components, modules, data stores, request flow, read-only guarantees) and full guides to curation, chapters, skills and the legal gate, in English and Italian.
+
 **4.3.0 - Copy and save images from the gallery**
 
 - add: image gallery — each image has Copy PNG and Save PNG buttons; JPEG covers are converted to PNG in the browser.

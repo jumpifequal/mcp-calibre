@@ -2,13 +2,159 @@
 
 [🇬🇧 English](README.md) · 🇮🇹 Italiano
 
-Server MCP in sola lettura che dà a Claude (e a qualsiasi client MCP) accesso nativo a una libreria Calibre
-locale: metadati, ricerca full-text su EPUB/PDF/MOBI/LIT/…, lettura per capitoli e pagine, highlight e note.
-Trasporti: **stdio** (Claude Desktop, app desktop ChatGPT, Codex) e **Streamable HTTP** (Claude Code, Codex, altri client, uso remoto).
+Server MCP in sola lettura che dà a Claude, ChatGPT, Codex e a qualsiasi altro client MCP accesso nativo a una
+libreria Calibre locale. Legge direttamente i database di Calibre (nessun processo Calibre, nessun accesso in
+scrittura) e aggiunge:
+
+- **ricerca** per metadati (con la sintassi di ricerca di Calibre), per parole esatte (full-text, BM25) e per
+  significato (ricerca semantica ibrida multilingue, opt-in);
+- **lettura** per offset, capitolo, sezione EPUB o pagina PDF, con una mappa dei capitoli per ogni formato, LIT e
+  MOBI inclusi;
+- **immagini**: copertine e figure elencate, cercate per didascalia e mostrate in linea nella chat con
+  Copy/Save PNG;
+- **curation**: report di qualità dei metadati, duplicati con confronto campo per campo, ISBN trovati nel testo;
+- **appunti dai libri**: skill companion per distillare un libro o un tema, e un legal gate che verifica che gli
+  appunti non riproducano le fonti.
+
+Trasporti: **stdio** (Claude Desktop, app desktop ChatGPT, Codex) e **Streamable HTTP** (Claude Code, Codex,
+altri client, uso remoto).
 
 ![Panoramica dell'architettura e degli aspetti tecnici di mcp-calibre](Architecture_and_Technical_Overview.png)
 
-*Panoramica dell'architettura e degli aspetti tecnici.*
+*Panoramica visiva del nucleo del server (accesso in sola lettura, indice full-text sidecar, catena di
+estrazione, trasporti). La sezione [Architettura](#architettura) qui sotto è il riferimento preciso e aggiornato,
+compresi gli indici semantico e delle figure introdotti nella 5.0.*
+
+## Cosa puoi chiedere
+
+| Obiettivo | Esempio di richiesta | Tool coinvolti |
+|---|---|---|
+| Trovare libri | "i miei libri di sicurezza non letti pubblicati dopo il 2020" | `calibre_search_books` (`query: 'tag:security and not #letto:true and pubdate:>2020'`) |
+| Trovare dove si parla di qualcosa | "quali libri spiegano la prompt injection?" | `calibre_search_fulltext`, `calibre_search_semantic` |
+| Leggere | "leggi il capitolo 3 di 1168", "mostra l'indice" | `calibre_get_chapters`, `calibre_read_text(chapter=…)`, `calibre_read_section` |
+| Vedere immagini | "mostrami le copertine di 1168 e 1164", "trova un diagramma del ciclo dell'agente" | `calibre_show_images`, `calibre_search_figures`, `calibre_list_figures` |
+| Sistemare la libreria | "cosa c'è che non va nei miei metadati?", "523 e 906 sono lo stesso libro?" | `calibre_quality_report`, `calibre_find_duplicates`, `calibre_compare_books`, `calibre_find_isbn` |
+| Imparare dai libri | "distilla 1168 in una skill", "sintetizza l'affidabilità degli agenti da 1164, 1168 e 1162" | skill `calibre-distill` / `calibre-distill-topic`, `calibre_check_overlap` |
+
+## Architettura
+
+### Componenti
+
+```mermaid
+flowchart LR
+  subgraph CL["Client AI"]
+    C1["Claude Desktop / claude.ai"]
+    C2["ChatGPT desktop / Codex"]
+    C3["Claude Code / altri client MCP"]
+  end
+  subgraph SV["calibre_mcp.py — server MCP in sola lettura"]
+    TR["Trasporti<br/>stdio · Streamable HTTP (bearer, controlli Host/Origin, TLS)"]
+    RG["Superficie MCP<br/>29 tool · 4 resources · 5 prompts · galleria UI<br/>libreria scelta per singola chiamata"]
+    QM["Metadati e curation<br/>query.py · quality.py · isbn.py"]
+    TX["Accesso al testo<br/>catena di estrazione · structure.py · htmlmd.py"]
+    SE["Ricerca<br/>FTS5 · highlight.py · semantic.py"]
+    FG["Figure e immagini<br/>figures.py · figindex.py · ui/gallery.html"]
+    LG["legalgate.py"]
+  end
+  subgraph CB["Libreria Calibre — sola lettura"]
+    MD[("metadata.db")]
+    FT[("full-text-search.db")]
+    NT[(".calnotes/notes.db")]
+    BF["file dei libri · cover.jpg"]
+  end
+  subgraph SC["Cache sidecar — del server, %LOCALAPPDATA%\calibre-mcp\&lt;libreria&gt;"]
+    IX[("index.db<br/>FTS5 + testo estratto")]
+    EM[("embeddings.db<br/>passaggi · vettori int8 · FTS5")]
+    FX[("figures.db<br/>didascalie (+ vettori)")]
+    MO["models/<br/>modello di embedding"]
+    CV["converted/<br/>copie EPUB di LIT/MOBI"]
+  end
+  C1 -- stdio --> TR
+  C2 -- "stdio / HTTP" --> TR
+  C3 -- HTTP --> TR
+  TR --> RG
+  RG --> QM & TX & SE & FG & LG
+  QM --> MD
+  QM --> NT
+  TX --> FT
+  TX --> BF
+  TX --> IX
+  SE --> IX
+  SE --> EM
+  FG --> BF
+  FG --> FX
+  LG --> TX
+  FT -. "sync in background (text_hash)" .-> IX
+  SE -. "modello, installato una volta" .-> MO
+  FG -. "figure di LIT/MOBI" .-> CV
+```
+
+Ogni freccia verso la libreria Calibre è una lettura attraverso una connessione SQLite aperta in `mode=ro` con
+`PRAGMA query_only=1`, oppure la lettura di un file dentro la root della libreria. Il server scrive solo nella
+propria cache sidecar.
+
+### Moduli
+
+| Modulo | Responsabilità |
+|---|---|
+| `calibre_mcp.py` | Punto di ingresso e CLI; trasporti stdio/HTTP; registrazione di tool, resources e prompts; registro delle librerie; la catena di estrazione del testo; l'indice full-text sidecar (`index.db`) e la sua sincronizzazione in background |
+| `mcpcalibre/query.py` | Sintassi di ricerca di Calibre → SQL parametrico (logica booleana, esatto/regex, numeri, date, colonne custom, `vl:` e `search:`), con protezione ReDoS |
+| `mcpcalibre/quality.py` | Audit dei metadati (controlli per libro e su tutta la libreria) |
+| `mcpcalibre/isbn.py` | Validazione ISBN-10/13 e ricerca nel testo del libro |
+| `mcpcalibre/structure.py` | Mappa dei capitoli: allineamento al TOC o rilevamento degli heading, classificazione front/back matter |
+| `mcpcalibre/htmlmd.py` | HTML degli EPUB → Markdown (heading, liste, tabelle, codice, id delle figure) |
+| `mcpcalibre/highlight.py` | Snippet guidati dalla query: clausole FTS5 (frasi, `NEAR`, `NOT`) cercate nel testo, finestre migliori prima |
+| `mcpcalibre/semantic.py` | Backend di embedding, passaggi contestualizzati entro i capitoli, archivio vettori int8, ricerca ibrida con RRF |
+| `mcpcalibre/figures.py` | Elenco ed estrazione delle figure di EPUB e PDF, rendering delle pagine, decodifica sicura delle immagini |
+| `mcpcalibre/figindex.py` | Indice delle didascalie su tutta la libreria per la ricerca delle figure |
+| `mcpcalibre/legalgate.py` | Controlli di sovrapposizione, citazioni, compressione, titoli e attribuzione per gli appunti derivati |
+| `mcpcalibre/ui/gallery.html` | Vista MCP Apps: galleria di immagini in linea con Copy/Save PNG |
+
+### Archivi di dati
+
+| Archivio | Dove | Chi lo scrive | Contenuto | Come si (ri)costruisce |
+|---|---|---|---|---|
+| `metadata.db` | libreria Calibre | solo Calibre | libri, autori, tag, serie, colonne custom, identifier, annotazioni, preferenze | — (sola lettura) |
+| `full-text-search.db` | libreria Calibre | solo Calibre | testo estratto da Calibre da ogni formato | indicizzazione FT di Calibre |
+| `.calnotes/notes.db` | libreria Calibre | solo Calibre | note su autori, tag, serie (Calibre 7+) | — (sola lettura) |
+| `index.db` | sidecar | questo server | indice FTS5 del testo di Calibre, testo estratto on-demand, indice con stemming opzionale | automatico: sync in background all'avvio e ogni 10 minuti; `--sync` |
+| `embeddings.db` | sidecar | questo server | passaggi (offset, capitolo, tipo), vettori int8, FTS5 dei passaggi | `--build-embeddings` (incrementale; `--rebuild`) |
+| `figures.db` | sidecar | questo server | didascalie e testo alternativo delle figure, vettori opzionali delle didascalie | `--index-figures` (incrementale) |
+| `models/` | radice del sidecar | questo server | cache del modello di embedding | `--download-model` (setup) |
+| `converted/` | sidecar | questo server | copie EPUB di libri LIT/MOBI/AZW3, create per raggiungerne le figure | on-demand, in base al file |
+
+Il sidecar si trova in `%LOCALAPPDATA%\calibre-mcp\<hash-libreria>\` (una cartella per libreria). Cancellarlo è
+sempre sicuro: tutto quello che contiene si può ricostruire dalla libreria Calibre.
+
+### Flusso di una richiesta: una domanda semantica
+
+```mermaid
+sequenceDiagram
+  participant C as Client AI
+  participant S as calibre_mcp.py
+  participant L as Libreria Calibre (sola lettura)
+  participant X as Sidecar (embeddings.db)
+  C->>S: calibre_search_semantic(query, mode=hybrid, query_filter?)
+  opt filtro sui metadati
+    S->>L: sintassi di ricerca Calibre → SQL su metadata.db
+  end
+  S->>X: embedding della query · coseno sui vettori int8 (a blocchi)
+  S->>X: BM25 sull'FTS5 dei passaggi
+  S->>S: reciprocal rank fusion · declassamento front/back matter · soglia di similarità
+  S->>L: testo del passaggio (books_text, o la cache di estrazione locale)
+  S-->>C: libri → passaggi (capitolo, offset, similarità, match per parole, low_confidence)
+  C->>S: calibre_read_text(book_id, offset, center=true)
+```
+
+### Garanzie di sola lettura
+
+| Letture | Scritture |
+|---|---|
+| database di Calibre tramite `mode=ro` + `PRAGMA query_only=1`; file dei libri e copertine dentro la root della libreria (path risolti e confinati) | solo la cache sidecar descritta sopra e il file di log |
+
+Non ci sono tool di scrittura, nessuna shell e nessun accesso alla rete durante le query (il modello viene
+scaricato una volta durante il setup). L'unico subprocess è `ebook-convert` di Calibre, eseguito senza shell, con
+timeout e a priorità ridotta.
 
 ## Design
 
@@ -21,6 +167,11 @@ Trasporti: **stdio** (Claude Desktop, app desktop ChatGPT, Codex) e **Streamable
 | Trasporti | stdio e Streamable HTTP (stateless, risposte JSON, bearer auth, protezione DNS rebinding, TLS opzionale) |
 | Portabilità | Windows/macOS/Linux, rilevamento automatico della libreria |
 | Log | stderr + `%LOCALAPPDATA%\calibre-mcp\calibre-mcp.log`, query registrate solo a livello DEBUG |
+| Ricerca semantica | indice locale opt-in di passaggi contestualizzati entro i capitoli (vettori int8 + FTS5 dei passaggi), classifica ibrida con reciprocal rank fusion |
+| Struttura | mappa dei capitoli per ogni formato (allineamento al TOC o rilevamento degli heading), front/back matter classificati |
+| Immagini | copertine e figure decodificate in modo sicuro e mostrate in linea tramite una vista MCP Apps; i dati delle immagini non entrano mai nel contesto del modello |
+| Curation | audit in sola lettura: report di qualità, duplicati e confronto, ricerca dell'ISBN |
+| Appunti derivati | skill companion più un legal gate meccanico (sovrapposizione, citazioni, compressione, titoli, attribuzione) |
 
 ## Perché un indice sidecar
 
@@ -108,7 +259,7 @@ powershell -ExecutionPolicy Bypass -File .\install.ps1 -Library "D:\Books\Calibr
 Poi riavvia completamente Claude Desktop (esci dall'icona nella tray, non basta chiudere la finestra).
 
 CLI: `python calibre_mcp.py --status` · `--sync` · `--extract-missing [--max-books N]` ·
-`--build-embeddings [--max-books N] [--rebuild]` · `--download-model` · `--library <path>` · `--transport http` (vedi sotto) · `--gen-token`.
+`--build-embeddings [--max-books N] [--rebuild]` · `--index-figures` · `--legal-gate DIR --book ID` · `--download-model` · `--library <path>` · `--transport http` (vedi sotto) · `--gen-token`.
 
 ## Client OpenAI: app desktop ChatGPT, Codex CLI, estensione IDE di Codex
 
@@ -248,6 +399,12 @@ Tutti i tool sono in sola lettura e accettano un argomento opzionale `library` q
 | `calibre_list_figures` | Figure di un libro come elenco testuale e leggero: id, didascalia o testo alternativo, capitolo o pagina, dimensioni. EPUB, PDF, e gli altri formati tramite una conversione EPUB in cache |
 | `calibre_get_figure` | Una figura come immagine, ridimensionata; gli SVG vengono rasterizzati |
 | `calibre_render_page` | Una pagina PDF, o una sua area, come immagine: per diagrammi vettoriali, tabelle, formule |
+| `calibre_get_chapters` | Mappa dei capitoli per qualsiasi formato (LIT, MOBI, PDF senza outline inclusi): dal TOC del libro quando possibile, altrimenti dagli heading nel testo; ogni capitolo è corpo, front o back matter |
+| `calibre_quality_report` | Audit dei metadati: campi mancanti, titoli che sono nomi di file, ISBN non validi, anomalie nei nomi degli autori, ordinamento autore non impostato, stesso autore o tag scritto in modi diversi, buchi nelle serie |
+| `calibre_find_isbn` | Trova l'ISBN del libro nel suo stesso testo (prima la pagina del copyright), validato dal checksum, confrontato con quello salvato |
+| `calibre_compare_books` | Confronto campo per campo di possibili duplicati, con il suggerimento di quale record tenere; segnala le traduzioni |
+| `calibre_search_figures` | Trova figure in tutta la libreria per didascalia e testo alternativo (per parole, e per significato con il modello semantico) |
+| `calibre_check_overlap` | Legal gate: verifica che appunti tratti dai libri non li riproducano (sovrapposizione testuale, citazioni, compressione, struttura dei capitoli, attribuzione) |
 | `calibre_list_facets` | Autori/tag/serie/editori/lingue/formati con il numero di libri |
 | `calibre_list_custom_columns` | Le tue `#colonne`: tipo, multiplicità, copertura, valori più frequenti |
 | `calibre_list_virtual_libraries` | Virtual library e ricerche salvate con espressione e numero di libri |
@@ -291,6 +448,60 @@ Prompts: `summarize_book`, `research_topic`, `compare_books`, `export_highlights
 Le resources si riferiscono alla libreria predefinita. Lo schema è `calibre-mcp://`, non `calibre://`, che è
 quello dei link desktop di Calibre.
 
+## Curation della libreria
+
+Tutti i tool di curation sono in sola lettura: segnalano, e tu correggi in Calibre. Nessuno richiede un indice.
+
+### Report di qualità
+
+`calibre_quality_report` controlla l'intera libreria, una query Calibre (`query: 'tag:security'`) o una virtual
+library. Restituisce un riepilogo per controllo, l'elenco paginato dei problemi per libro e i problemi a livello
+di libreria.
+
+| Controllo | Cosa trova | Correzione tipica in Calibre |
+|---|---|---|
+| `missing_authors`, `missing_tags`, `missing_language`, `missing_publisher`, `missing_pubdate`, `missing_cover`, `missing_isbn`, `missing_description` | il campo è vuoto (o l'autore è "Unknown") | Modifica metadati, oppure Scarica metadati |
+| `no_formats` | un record senza alcun file del libro | elimina il record o aggiungi il file |
+| `raw_filename_title` | titoli come `795731065.pdf` o `BOOK_12_final` | Modifica metadati → titolo (oppure `calibre_find_isbn` + Scarica metadati) |
+| `title_noise` | `(Italian Edition)`, `[ebook]`, spazi doppi o finali | Modifica metadati → titolo |
+| `invalid_isbn` | un ISBN salvato con checksum o lunghezza sbagliati | correggi l'identifier (`calibre_find_isbn` trova quello giusto) |
+| `author_name_anomaly` | `\|`, `;`, cifre, `Cognome, Nome` nel campo nome, tutto maiuscolo | Gestisci autori → rinomina |
+| `author_sort_unsorted` | ordinamento autore uguale al nome (`Glenn Cooper` invece di `Cooper, Glenn`) | Gestisci autori → ricalcola l'ordinamento |
+| `author_variants` | lo stesso autore scritto in modi diversi (`Cooper\| Glenn` e `Glenn Cooper`) | Gestisci autori → rinomina uno nell'altro (Calibre li unisce) |
+| `tag_variants` | lo stesso tag scritto in modi diversi (`Science-Fiction`, `science fiction`) | Navigatore dei tag → rinomina (unisce) |
+| `series_gaps` | numeri mancanti o duplicati in una serie | correggi l'indice di serie, o annota il volume mancante |
+
+### Duplicati e confronto
+
+`calibre_find_duplicates` raggruppa i probabili duplicati per titolo, titolo + autore o ISBN. È prudente di
+default: ignora note di edizione e parentesi senza numeri, ma mantiene sottotitoli e parti numerate, e non
+raggruppa mai numeri diversi della stessa serie. I gruppi con libri in lingue diverse sono segnalati come
+**probabili traduzioni**. `calibre_compare_books` confronta poi un gruppo campo per campo (formati, identifier,
+descrizione, copertina, testo estratto…) e suggerisce quale record tenere.
+
+### ISBN dal testo
+
+`calibre_find_isbn` analizza il testo del libro (prima la pagina del copyright; gli ISBN citati nel corpo hanno
+priorità più bassa), tiene solo gli ISBN con checksum valido e confronta il migliore con l'identifier salvato:
+confermato, diverso o suggerito. Utile per i libri con metadati scarni prima di "Scarica metadati".
+
+## Leggere per capitoli
+
+`calibre_get_chapters` restituisce una mappa dei capitoli per **ogni** formato:
+
+| Metodo | Quando | Come |
+|---|---|---|
+| `toc` | EPUB con TOC, PDF con outline | le voci del TOC del libro vengono cercate nel testo, in ordine (numerazioni come "1." o "Capitolo 3" vengono ignorate da entrambe le parti) |
+| `headings` | LIT, MOBI, AZW3, DOCX, PDF senza outline, EPUB senza TOC | gli heading vengono rilevati nel testo (parole chiave di capitolo/parte in più lingue, numerazione, numeri romani, righe brevi in maiuscolo); un indice stampato nel testo viene riconosciuto e saltato |
+| `none` | nessuna struttura trovata | un solo capitolo che copre tutto il testo |
+
+Ogni capitolo è classificato come `body`, `front` (indice, copyright, pagine di lodi, dedica…) o `back` (indice
+analitico, bibliografia, note…), in base al titolo e, per i titoli ambigui come i ringraziamenti, alla posizione.
+`calibre_read_text(book_id, chapter=N)` legge un capitolo e si ferma alla sua fine. La stessa mappa guida i
+passaggi semantici (non attraversano mai un capitolo), il declassamento del front matter e il controllo dei
+titoli del legal gate. `calibre_get_toc` / `calibre_read_section` restano disponibili per le sezioni EPUB e gli
+intervalli di pagine PDF.
+
 ## Funzioni opzionali
 
 **Più librerie.** Imposta `CALIBRE_LIBRARIES` con i path separati da `;` su Windows (`:` altrove); la prima è
@@ -300,19 +511,36 @@ quella predefinita. Ogni libreria ha il proprio indice sidecar.
 (`exploits` ↔ `exploitation`). Raddoppia circa lo spazio dell'indice e viene riempito in modo incrementale in
 background. Porter è uno stemmer **inglese**: non aiuta con il testo italiano.
 
-**Ricerca semantica.** Dipendenze (`requirements-semantic.txt`: numpy + fastembed) e modello vengono installati da
-`install.ps1` (escludibili con `-NoSemantic`; saltati in automatico con Python a 32 bit): vedi
-[Modello per la ricerca semantica](#modello-per-la-ricerca-semantica). L'indice è opt-in, pesante sulla CPU (metà dei
-core di default, `CALIBRE_MCP_EMBED_THREADS`) e mai costruito in automatico:
+**Ricerca semantica.** Dipendenze e modello vengono installati da `install.ps1` (escludibili con `-NoSemantic`):
+vedi [Modello per la ricerca semantica](#modello-per-la-ricerca-semantica). L'indice è opt-in e mai costruito in
+automatico:
 
 ```powershell
 .venv\Scripts\python.exe calibre_mcp.py --build-embeddings --max-books 50   # incrementale, riprendibile
 ```
 
-Se un tool segnala dipendenze mancanti, installale **nel venv del server**, non nel Python di sistema (il messaggio
-d'errore stampa il comando esatto), poi riavvia il client MCP. Vengono indicizzati fino a 300 chunk per libro
-(campionati uniformemente), salvati in float16 in `embeddings.db`; la matrice viene caricata in memoria alla prima
-query semantica (circa 0,8 KB per chunk).
+Come viene costruito l'indice: ogni libro è diviso in passaggi di circa 700 caratteri che non attraversano mai il
+confine di un capitolo (mappa dei capitoli), e ogni passaggio è codificato insieme al suo contesto (titolo, autore
+e capitolo), così il vettore sa da dove proviene. Il libro è coperto per intero, fino a 1.500 passaggi
+(`CALIBRE_MCP_EMBED_MAX_CHUNKS`), salvati come vettori int8 più un indice per parole sugli stessi passaggi.
+
+Come viene risposta una query (`mode`): **hybrid** (default) ordina i passaggi per significato e per termini esatti
+(nomi, id, codice) e fonde le due classifiche con la reciprocal rank fusion; `vector` e `keyword` usano solo una
+metà. Front e back matter (indice, pagine di lodi, indice analitico) vengono declassati ed etichettati; i risultati
+sotto la soglia di similarità (`CALIBRE_MCP_SEMANTIC_FLOOR`, default 0,30, non ancora calibrata su librerie grandi)
+sono marcati `low_confidence`. Con `book_id` la ricerca restituisce passaggi ordinati dentro un solo libro.
+
+Dimensioni: circa 700 passaggi per un libro medio, circa 384 byte ciascuno in memoria. Per circa 1.000 libri
+aspettati circa 300 MB di RAM per i vettori, un indice di circa 600 MB su disco e una prima costruzione di una o due
+ore di CPU (metà dei core di default, `CALIBRE_MCP_EMBED_THREADS`); le costruzioni successive elaborano solo i libri
+nuovi o modificati.
+
+**Aggiornamento dalla 4.x:** il formato dell'indice è cambiato. Esegui una volta `--build-embeddings`: rileva il
+vecchio indice e lo ricostruisce; fino ad allora la ricerca semantica lo segnala invece di dare risultati vecchi.
+
+**Ricerca delle figure.** `calibre_mcp.py --index-figures` indicizza didascalie e testo alternativo delle figure
+di EPUB e PDF (incrementale; con il modello semantico le didascalie vengono anche codificate). Poi
+`calibre_search_figures` le trova in tutta la libreria e `calibre_show_images` le mostra.
 
 **Figure.** Prima `calibre_list_figures` (solo testo, costa poco), poi `calibre_get_figure` per quella che serve.
 Nei PDF, una didascalia senza immagine incorporata indica un disegno vettoriale: `calibre_render_page` con un
@@ -364,6 +592,40 @@ come HTML; vengono visualizzati solo dati PNG e JPEG (SVG e qualunque altro form
 galleria accetta messaggi solo dal riquadro padre e non carica nulla dall'esterno. Queste proprietà sono
 verificate in un browser reale (`tests/test_gallery_browser.py`, `tests/test_gallery_copy_save.py`), con didascalie e payload ostili.
 
+## Appunti dai libri: skill e legal gate
+
+### Skill companion
+
+Due Agent Skill in `skills/` guidano i tool descritti sopra:
+
+| Skill | Serve a | Risultato |
+|---|---|---|
+| `calibre-distill` | trasformare **un** libro in conoscenza riusabile | una skill o scheda di studio: framework e modelli mentali, guida alle decisioni, glossario, cheatsheet, errori comuni, fonte |
+| `calibre-distill-topic` | sintetizzare **un tema su tre o più** libri | una guida organizzata per concetti: decision framework, una sezione per concetto, tabella tra le fonti, dove le fonti concordano o divergono, percorso di lettura, bibliografia |
+
+Entrambe seguono la stessa disciplina: leggere con uno scopo (mappa dei capitoli, ricerca semantica dentro il
+libro), parafrasare, strutturare per concetti e non per capitoli del libro, citare le fonti, e concludere con il
+legal gate. Installazione: Claude Code → copia la cartella in `~/.claude/skills/`; claude.ai e Claude Desktop →
+comprimi la cartella in zip e caricala in Impostazioni → Capabilities → Skills. Poi chiedi, per esempio,
+"distilla il libro 1168 in una skill".
+
+### Legal gate
+
+`calibre_check_overlap(text, book_ids)` (oppure `calibre_mcp.py --legal-gate <cartella> --book <id> …` per i
+file) verifica meccanicamente che un testo tratto dai libri non li riproduca:
+
+| Controllo | Limite di default | Significato | Se fallisce |
+|---|---|---|---|
+| `verbatim_overlap` | ≤ 3 % | quota delle sequenze di 8 parole del testo (fuori dalle citazioni dichiarate) presenti nelle fonti | riscrivi i passaggi segnalati con parole tue |
+| `longest_run` | ≤ 20 parole | tratto più lungo copiato parola per parola fuori dalle citazioni (il report lo mostra) | riscrivi quel tratto |
+| `quote_budget` | ≤ 20 citazioni, ≤ 25 parole ciascuna | le citazioni dichiarate (“…”, "…", «…», righe `>`) sono ammesse ma brevi e poche | accorcia o elimina citazioni |
+| `compression` | ≤ 15 % | parole del testo rispetto alle parole delle fonti | taglia: un distillato è una frazione del libro |
+| `heading_mirroring` | ≤ 50 % dei titoli, < 5 in ordine | titoli che replicano quelli dei capitoli delle fonti o la loro sequenza | riorganizza per concetti |
+| `attribution` | ogni fonte | ogni libro citato per titolo, cognome di un autore o ISBN | aggiungi una sezione Fonte / Bibliografia |
+
+La CLI termina con 0 se tutto passa e con 1 altrimenti, quindi si può usare in uno script. Un PASS è una prova
+meccanica di trasformazione, **non un parere legale**.
+
 ## Modello per la ricerca semantica
 
 La ricerca semantica usa **`sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2`**, un modello di
@@ -410,7 +672,9 @@ sopra, oppure usa `CALIBRE_MCP_EMBED_BACKEND=hash` (fallback lessicale offline, 
 | `CALIBRE_MCP_STEMMING` | `0` (`1` = secondo indice con stemming) |
 | `CALIBRE_MCP_EMBED_BACKEND` | `fastembed` (`hash` = fallback lessicale per test o macchine air-gapped) |
 | `CALIBRE_MCP_EMBED_MODEL` | `sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2` |
-| `CALIBRE_MCP_EMBED_MAX_CHUNKS` | `300` chunk per libro |
+| `CALIBRE_MCP_EMBED_MAX_CHUNKS` | `1500` passaggi per libro (campionati uniformemente oltre) |
+| `CALIBRE_MCP_EMBED_CHUNK` | `700` caratteri per passaggio |
+| `CALIBRE_MCP_SEMANTIC_FLOOR` | `0.30` similarità sotto cui i risultati sono marcati `low_confidence` |
 | `CALIBRE_MCP_EMBED_THREADS` | metà dei core |
 | `FASTEMBED_CACHE_PATH` | `%LOCALAPPDATA%\calibre-mcp\models` |
 
@@ -426,6 +690,11 @@ sopra, oppure usa `CALIBRE_MCP_EMBED_BACKEND=hash` (fallback lessicale offline, 
 | "Semantic search dependencies are missing" | Sono state installate in un altro Python: esegui il comando stampato nell'errore (usa il `python.exe` del server), poi riavvia il client |
 | Download del modello fallito durante il setup | Verifica rete/`HTTPS_PROXY`, poi `.venv\Scripts\python.exe calibre_mcp.py --download-model`; offline: vedi [Modello per la ricerca semantica](#modello-per-la-ricerca-semantica) |
 | Codex/ChatGPT: timeout di un tool | Alza `tool_timeout_sec` in `config.toml` (la conversione on-demand di LIT/MOBI può richiedere minuti) |
+| "The semantic index was built by an older version" | indice della 4.x: esegui una volta `.venv\Scripts\python.exe calibre_mcp.py --build-embeddings` |
+| Risultati semantici tutti `low_confidence` | il tema potrebbe non essere nella libreria, o i libri pertinenti non sono ancora indicizzati: controlla `semantic_index.books` in `calibre_library_status` |
+| "Figure index not built" / la ricerca delle figure non trova nulla | esegui `calibre_mcp.py --index-figures`; vengono indicizzate solo le figure di EPUB e PDF con didascalia o testo alternativo |
+| Mappa con un solo capitolo o titoli strani | il libro non ha TOC né heading riconoscibili; usa `calibre_read_text` per offset, o `calibre_get_toc` per le sezioni EPUB |
+| Legal gate FAIL | il report indica il controllo e, per `longest_run`, il testo copiato: riscrivilo, poi rilancia |
 
 ## Note di sicurezza
 
@@ -438,6 +707,7 @@ sopra, oppure usa `CALIBRE_MCP_EMBED_BACKEND=hash` (fallback lessicale offline, 
 - **Immagini**: decodificate da file non fidati con un limite di pixel verificato dall'header prima della decodifica (decompression bomb), limiti di dimensione e confinamento dei path nell'archivio; gli SVG vengono solo rasterizzati, mai passati come markup; l'output è sempre ricodificato. Anche il testo dentro le immagini è contenuto non fidato (prompt injection visiva): le instructions del server lo dichiarano.
 - **Linguaggio di query**: compilato in SQL parametrico; nomi di tabelle e colonne arrivano solo da una mappa fissa o dagli id interi delle colonne custom, mai dal testo dell'utente. Protezione ReDoS sulle regex (limite di lunghezza, niente quantificatori annidati o backreference, testo analizzato troncato).
 - **Ricerca semantica**: il modello di embedding è codice e pesi di terze parti scaricati una volta da Hugging Face durante il setup (fiducia nella supply chain); le query non lasciano mai la macchina. Usa `CALIBRE_MCP_EMBED_BACKEND=hash` dove i download non sono accettabili.
+- **Curation e legal gate**: solo report; nulla viene modificato in Calibre. Il legal gate è una prova meccanica di trasformazione, non un parere legale.
 - **Nessun percorso di scrittura**: il server non modifica mai la libreria Calibre. Scrive solo i propri file sidecar in `%LOCALAPPDATA%\calibre-mcp`.
 - **Licenze**: PyMuPDF e pymupdf4llm sono AGPL-3.0; pypdf è BSD; fastembed è Apache-2.0.
 
@@ -446,6 +716,8 @@ sopra, oppure usa `CALIBRE_MCP_EMBED_BACKEND=hash` (fallback lessicale offline, 
 - Le colonne custom composite (calcolate da template) non sono leggibili: Calibre non ne salva i valori.
 - La sintassi di ricerca è un ampio sottoinsieme di quella di Calibre: niente `template:`, `marked:`, `ondevice:`, e il match gerarchico dei tag (`tag:.parent`) non è gestito in modo speciale.
 - Lo stemming è solo inglese (Porter).
+- Il rilevamento dei capitoli senza TOC è euristico (parole chiave, numerazione, righe brevi in maiuscolo); impaginazioni insolite possono dare una mappa grossolana.
+- La ricerca delle figure copre EPUB e PDF; le figure dentro LIT/MOBI/AZW3 si raggiungono libro per libro con `calibre_list_figures`, non tramite l'indice di libreria.
 - Libreria su share di rete o OneDrive: funziona in sola lettura, ma con latenze maggiori ed effetti collaterali della sincronizzazione per Calibre stesso.
 - Gli offset restituiti da `search_fulltext` si riferiscono al testo del `format` indicato, non alle sezioni EPUB estratte on-demand.
 

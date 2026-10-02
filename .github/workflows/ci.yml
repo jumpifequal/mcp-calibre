@@ -36,6 +36,7 @@ jobs:
           python tests/test_real_cases.py
           python tests/test_snippets.py
           python tests/test_figures.py
+          python tests/test_v5.py
       - name: gallery in a real browser (Linux)
         if: runner.os == 'Linux'
         shell: bash

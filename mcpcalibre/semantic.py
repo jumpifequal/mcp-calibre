@@ -8,8 +8,15 @@ Backends (CALIBRE_MCP_EMBED_BACKEND)
              384 dims, IT+EN). The model is downloaded once from Hugging Face on first build.
   hash       dependency-light lexical fallback (feature hashing). Not semantic: for tests and
              air-gapped machines.
-Storage: <sidecar>/embeddings.db, float16 vectors, chunks of ~CHUNK chars, at most MAX_CHUNKS per
-book (evenly sampled), so memory at query time is bounded (~0.8 KB per chunk at 384 dims).
+Index (schema 2), <sidecar>/embeddings.db
+  passages  ~CHUNK chars, split inside chapters (chapter map), each embedded WITH its context
+            ("title - author > chapter: text") so the vector knows where it comes from
+  coverage  the whole book, up to MAX_CHUNKS passages (evenly sampled beyond that)
+  vectors   int8 (384 bytes per passage at 384 dims), scored in blocks: bounded memory
+  keywords  an FTS5 index over the same passages, for hybrid search
+Search (hybrid by default): vector ranking + keyword (BM25) ranking fused with reciprocal rank
+fusion; front/back-matter passages (contents, praise, copyright, index...) are demoted, and a
+similarity floor flags weak matches instead of presenting them as relevant.
 """
 from __future__ import annotations
 
@@ -22,9 +29,16 @@ import time
 from pathlib import Path
 from typing import Any, Callable, Iterable, Optional
 
-CHUNK = int(os.environ.get("CALIBRE_MCP_EMBED_CHUNK", "1200"))
-OVERLAP = 200
-MAX_CHUNKS = int(os.environ.get("CALIBRE_MCP_EMBED_MAX_CHUNKS", "300"))
+# The default model was trained on 128 word pieces: ~700 chars (+ context prefix) keeps passages
+# inside its effective window instead of diluting them.
+CHUNK = int(os.environ.get("CALIBRE_MCP_EMBED_CHUNK", "700"))
+OVERLAP = 120
+MAX_CHUNKS = int(os.environ.get("CALIBRE_MCP_EMBED_MAX_CHUNKS", "1500"))
+SCHEMA = "2"
+RRF_K = 60
+FRONT_DEMOTION = 0.5
+SIM_FLOOR = float(os.environ.get("CALIBRE_MCP_SEMANTIC_FLOOR", "0.30"))
+_BLOCK = 65_536
 DEFAULT_MODEL = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
 MODEL_DIR: Optional[Path] = None   # set by calibre_mcp at startup (sidecar dir), not the OS temp folder
 _REQ = Path(__file__).resolve().parent.parent / "requirements-semantic.txt"
@@ -118,23 +132,51 @@ def prefetch_model(fold: Callable[[str], str]) -> dict[str, Any]:
     return info
 
 
-def chunk_text(text: str) -> list[tuple[int, str]]:
-    out, pos, n = [], 0, len(text)
-    while pos < n:
-        end = min(n, pos + CHUNK)
-        if end < n:
-            sp = text.rfind(" ", pos + CHUNK // 2, end)
-            end = sp if sp > 0 else end
-        piece = text[pos:end].strip()
-        if len(piece) > 80:
-            out.append((pos, piece))
-        if end >= n:
-            break
-        pos = max(end - OVERLAP, pos + 1)
+def chunk_text(text: str, chapters: Optional[list[dict]] = None) -> list[dict]:
+    """Passages that never cross a chapter boundary. Each: {off, text, heading, kind}."""
+    spans = chapters or [{"offset": 0, "end": len(text), "title": None, "kind": "body"}]
+    out: list[dict] = []
+    for ch in spans:
+        pos, end = ch["offset"], ch["end"]
+        while pos < end:
+            stop = min(end, pos + CHUNK)
+            if stop < end:
+                sp = text.rfind(" ", pos + CHUNK // 2, stop)
+                stop = sp if sp > 0 else stop
+            piece = text[pos:stop].strip()
+            if len(piece) > 60:
+                out.append({"off": pos, "text": piece, "heading": ch.get("title"), "kind": ch.get("kind", "body")})
+            if stop >= end:
+                break
+            pos = max(stop - OVERLAP, pos + 1)
     if len(out) > MAX_CHUNKS:  # even sampling keeps coverage of the whole book
         step = len(out) / MAX_CHUNKS
         out = [out[int(i * step)] for i in range(MAX_CHUNKS)]
     return out
+
+
+def context_prefix(title: str, authors: str, heading: Optional[str]) -> str:
+    head = f"{title} - {authors}".strip(" -")[:120]
+    return f"{head} > {heading[:80]}: " if heading else f"{head}: "
+
+
+_WORD = re.compile(r"[^\W\d_]{3,}", re.UNICODE)
+_STOP = set("""the and for with that this from are was were have has had not but you your they their them what
+which when where who how why can could would should will into about over under than then also only such
+these those there here its our out all any per via una uno gli lei lui che chi con per tra fra del della
+delle dei degli dal dalla nel nella nei sul sulla come anche più non sono era essere hanno questo questa
+quello quella quali quale cosa dove quando perché però tutti tutto ogni""".split())
+
+
+def keyword_match(queries: list[str], fold: Callable[[str], str]) -> Optional[str]:
+    """Natural-language question(s) -> OR of quoted content words (lexical half of hybrid search)."""
+    words, seen = [], set()
+    for q in queries:
+        for w in _WORD.findall(fold(q).casefold()):
+            if w not in _STOP and w not in seen:
+                seen.add(w)
+                words.append(w)
+    return " OR ".join(f'"{w}"' for w in words[:24]) or None
 
 
 class SemanticIndex:
@@ -151,11 +193,22 @@ class SemanticIndex:
         c.execute("PRAGMA journal_mode=WAL")
         c.executescript("""
             CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, val TEXT);
-            CREATE TABLE IF NOT EXISTS books (book INTEGER PRIMARY KEY, fmt TEXT, src_hash TEXT, n INTEGER);
-            CREATE TABLE IF NOT EXISTS chunks (id INTEGER PRIMARY KEY, book INTEGER, fmt TEXT,
-                                               off INTEGER, vec BLOB);
-            CREATE INDEX IF NOT EXISTS chunks_book ON chunks(book);""")
+            CREATE TABLE IF NOT EXISTS books (book INTEGER PRIMARY KEY, fmt TEXT, src_hash TEXT, n INTEGER);""")
         return c
+
+    def _schema_ok(self, c: sqlite3.Connection) -> bool:
+        return dict(c.execute("SELECT key, val FROM meta")).get("schema") == SCHEMA
+
+    @staticmethod
+    def _create_v2(c: sqlite3.Connection) -> None:
+        contentless = tuple(map(int, sqlite3.sqlite_version.split("."))) >= (3, 43, 0)
+        opts = ", content='', contentless_delete=1" if contentless else ""
+        c.executescript(f"""
+            DROP TABLE IF EXISTS chunks; DROP TABLE IF EXISTS chunks_fts; DELETE FROM books; DELETE FROM meta;
+            CREATE TABLE chunks (id INTEGER PRIMARY KEY, book INTEGER, fmt TEXT, off INTEGER, len INTEGER,
+                                 heading TEXT, kind TEXT, vec BLOB);
+            CREATE INDEX chunks_book ON chunks(book);
+            CREATE VIRTUAL TABLE chunks_fts USING fts5(body, tokenize='unicode61 remove_diacritics 2'{opts});""")
 
     def info(self) -> dict[str, Any]:
         if not self.exists():
@@ -163,56 +216,83 @@ class SemanticIndex:
         with sqlite3.connect(f"{self.path.resolve().as_uri()}?mode=ro", uri=True) as c:
             meta = dict(c.execute("SELECT key, val FROM meta"))
             books, chunks = c.execute("SELECT COUNT(*), COALESCE(SUM(n),0) FROM books").fetchone()
-        return {"built": True, "backend": meta.get("backend"), "dim": meta.get("dim"), "books": books,
-                "chunks": chunks, "size_mb": round(self.path.stat().st_size / 2 ** 20, 1)}
+        out = {"built": True, "schema": meta.get("schema", "1"), "backend": meta.get("backend"), "dim": meta.get("dim"),
+               "books": books, "chunks": chunks, "size_mb": round(self.path.stat().st_size / 2 ** 20, 1)}
+        if meta.get("schema") != SCHEMA:
+            out["needs_rebuild"] = "index from an older version: run  calibre_mcp.py --build-embeddings"
+        return out
 
-    def build(self, sources: Iterable[tuple[int, str, str]], get_text: Callable[[int, str], str],
+    def build(self, sources: Iterable[tuple[int, str, str]],
+              prepare: Callable[[int, str], tuple[str, str, str, list[dict]]],
               fold: Callable[[str], str], max_books: int = 0, rebuild: bool = False,
               progress: Callable[[str], None] = print) -> dict[str, Any]:
-        """sources: (book, fmt, src_hash). Incremental: unchanged books are skipped."""
+        """sources: (book, fmt, src_hash). prepare(book, fmt) -> (text, title, authors, chapters).
+        Incremental: unchanged books are skipped; an index from an older schema is rebuilt."""
         np = _np()
         sources = list(sources)
         emb = get_embedder(fold)
         t0, done, failed = time.monotonic(), 0, 0
         with self._conn() as c:
             meta = dict(c.execute("SELECT key, val FROM meta"))
-            if rebuild or (meta and (meta.get("backend") != emb.name or meta.get("dim") != str(emb.dim))):
-                if meta and not rebuild:
-                    progress(f"embedding backend changed ({meta.get('backend')} -> {emb.name}): rebuilding")
-                c.executescript("DELETE FROM chunks; DELETE FROM books; DELETE FROM meta;")
+            reason = ("requested" if rebuild else
+                      "index format upgraded" if meta.get("schema") != SCHEMA else
+                      f"embedding backend changed ({meta.get('backend')} -> {emb.name})"
+                      if meta.get("backend") not in (None, emb.name) or meta.get("dim") not in (None, str(emb.dim)) else None)
+            if reason:
+                if meta:
+                    progress(f"rebuilding the semantic index: {reason}")
+                self._create_v2(c)
             c.executemany("INSERT OR REPLACE INTO meta VALUES (?,?)",
-                          [("backend", emb.name), ("dim", str(emb.dim))])
+                          [("schema", SCHEMA), ("backend", emb.name), ("dim", str(emb.dim)), ("chunk", str(CHUNK))])
             have = dict(c.execute("SELECT book, src_hash FROM books"))
             todo = [s for s in sources if have.get(s[0]) != s[2]]
             unchanged = len(sources) - len(todo)
             live = {s[0] for s in sources}
             gone = [b for b in have if b not in live]
             for b in gone:
-                c.execute("DELETE FROM chunks WHERE book=?", (b,))
-                c.execute("DELETE FROM books WHERE book=?", (b,))
+                self._drop_book(c, b)
             c.commit()
             if max_books:
                 todo = todo[:max_books]
             for i, (book, fmt, h) in enumerate(todo, 1):
                 try:
-                    chunks = chunk_text(get_text(book, fmt))
-                    vecs = emb.embed([t for _, t in chunks]) if chunks else np.zeros((0, emb.dim), np.float32)
+                    text, title, authors, chapters = prepare(book, fmt)
+                    chunks = chunk_text(text, chapters)
+                    inputs = [context_prefix(title, authors, ch["heading"]) + ch["text"] for ch in chunks]
+                    vecs = np.zeros((0, emb.dim), np.float32)
+                    if inputs:
+                        vecs = np.concatenate([emb.embed(inputs[j:j + 64]) for j in range(0, len(inputs), 64)])
                 except (ValueError, OSError) as exc:
                     failed += 1
                     progress(f"[{i}/{len(todo)}] book {book}: FAILED {exc}")
                     continue
-                c.execute("DELETE FROM chunks WHERE book=?", (book,))
-                c.executemany("INSERT INTO chunks(book, fmt, off, vec) VALUES (?,?,?,?)",
-                              [(book, fmt, off, v.astype(np.float16).tobytes()) for (off, _), v in zip(chunks, vecs)])
+                self._drop_book(c, book)
+                q = np.clip(np.rint(vecs * 127), -127, 127).astype(np.int8)
+                for ch, v in zip(chunks, q):
+                    cur = c.execute("INSERT INTO chunks(book, fmt, off, len, heading, kind, vec) VALUES (?,?,?,?,?,?,?)",
+                                    (book, fmt, ch["off"], len(ch["text"]), ch["heading"], ch["kind"], v.tobytes()))
+                    c.execute("INSERT INTO chunks_fts(rowid, body) VALUES (?,?)", (cur.lastrowid, ch["text"]))
                 c.execute("INSERT OR REPLACE INTO books VALUES (?,?,?,?)", (book, fmt, h, len(chunks)))
                 c.commit()
                 done += 1
-                progress(f"[{i}/{len(todo)}] book {book}: {len(chunks)} chunks")
+                progress(f"[{i}/{len(todo)}] book {book}: {len(chunks)} passages")
         self._cache = None
         return {"embedded": done, "failed": failed, "unchanged": unchanged, "removed": len(gone),
                 "backend": emb.name, "seconds": round(time.monotonic() - t0, 1)}
 
+    @staticmethod
+    def _drop_book(c: sqlite3.Connection, book: int) -> None:
+        ids = [r[0] for r in c.execute("SELECT id FROM chunks WHERE book=?", (book,))]
+        for cid in ids:
+            c.execute("DELETE FROM chunks_fts WHERE rowid=?", (cid,))
+        c.execute("DELETE FROM chunks WHERE book=?", (book,))
+        c.execute("DELETE FROM books WHERE book=?", (book,))
+
+    def _ro(self) -> sqlite3.Connection:
+        return sqlite3.connect(f"{self.path.resolve().as_uri()}?mode=ro", uri=True)
+
     def _matrix(self):
+        """(int8 matrix, rows) cached until the file changes. rows[i] = (id, book, fmt, off, len, heading, kind)."""
         np = _np()
         mtime = self.path.stat().st_mtime
         wal = self.path.with_name(self.path.name + "-wal")
@@ -221,35 +301,109 @@ class SemanticIndex:
         with self._lock:
             if self._cache and self._cache[0] == mtime:
                 return self._cache[1], self._cache[2]
-            with sqlite3.connect(f"{self.path.resolve().as_uri()}?mode=ro", uri=True) as c:
-                rows = c.execute("SELECT book, fmt, off, vec FROM chunks ORDER BY id").fetchall()
+            with self._ro() as c:
+                if not self._schema_ok(c):
+                    raise ValueError("The semantic index was built by an older version: rebuild it with  "
+                                     "calibre_mcp.py --build-embeddings")
                 dim = int(dict(c.execute("SELECT key, val FROM meta")).get("dim", 0))
+                rows = c.execute("SELECT id, book, fmt, off, len, heading, kind, vec FROM chunks ORDER BY id").fetchall()
             if not rows:
                 raise ValueError("Embedding index is empty: run  python calibre_mcp.py --build-embeddings")
-            mat = np.frombuffer(b"".join(r[3] for r in rows), dtype=np.float16).reshape(len(rows), dim)
-            ids = [(r[0], r[1], r[2]) for r in rows]
-            self._cache = (mtime, mat, ids)
-            return mat, ids
+            mat = np.frombuffer(b"".join(r[7] for r in rows), dtype=np.int8).reshape(len(rows), dim)
+            meta = [r[:7] for r in rows]
+            self._cache = (mtime, mat, meta)
+            return mat, meta
 
-    def search(self, query: str, fold: Callable[[str], str], k: int,
-               allowed: Optional[set[int]] = None) -> list[tuple[int, str, int, float]]:
+    def _vector_scores(self, qv, allowed_mask=None):
+        """Cosine similarity of every passage, computed in blocks (bounded temporary memory)."""
+        np = _np()
+        mat, _ = self._matrix()
+        out = np.empty(mat.shape[0], dtype=np.float32)
+        for a in range(0, mat.shape[0], _BLOCK):
+            out[a:a + _BLOCK] = (mat[a:a + _BLOCK].astype(np.float32) @ qv) / 127.0
+        if allowed_mask is not None:
+            out[~allowed_mask] = -np.inf
+        return out
+
+    def search(self, query: str, fold: Callable[[str], str], k: int, allowed: Optional[set[int]] = None,
+               mode: str = "hybrid", alt_queries: Optional[list[str]] = None,
+               book: Optional[int] = None) -> list[dict]:
+        """Ranked passages: {book, fmt, off, len, heading, kind, score, vector, keyword_rank, low_confidence}."""
         np = _np()
         if not self.exists():
             raise ValueError("Semantic index not built. Run:  python calibre_mcp.py --build-embeddings "
                              "[--max-books N]   (opt-in, CPU heavy)")
-        mat, ids = self._matrix()
-        with sqlite3.connect(f"{self.path.resolve().as_uri()}?mode=ro", uri=True) as c:
-            backend = dict(c.execute("SELECT key, val FROM meta")).get("backend")
-        emb = get_embedder(fold)
-        if emb.name != backend:
-            raise ValueError(f"Index built with {backend}, current backend is {emb.name}: rebuild with "
-                             "--build-embeddings --rebuild")
-        q = emb.embed([query])[0].astype(np.float32)
-        scores = mat.astype(np.float32) @ q
+        mat, meta = self._matrix()
+        if book is not None:
+            allowed = {book} if allowed is None else (allowed & {book})
+        mask = None
         if allowed is not None:
-            mask = np.fromiter((i[0] in allowed for i in ids), dtype=bool, count=len(ids))
-            scores = np.where(mask, scores, -np.inf)
-        k = min(k, len(ids))
-        top = np.argpartition(-scores, k - 1)[:k]
-        top = top[np.argsort(-scores[top])]
-        return [(ids[i][0], ids[i][1], ids[i][2], float(scores[i])) for i in top if np.isfinite(scores[i])]
+            mask = np.fromiter((m[1] in allowed for m in meta), dtype=bool, count=len(meta))
+        queries = [query, *[q for q in (alt_queries or []) if q and q.strip() and q != query]]
+        pool = max(k * 4, 200)
+        vec_best = np.full(len(meta), -np.inf, dtype=np.float32)
+        vec_rank: dict[int, int] = {}
+        if mode in ("hybrid", "vector"):
+            with self._ro() as c:
+                backend = dict(c.execute("SELECT key, val FROM meta")).get("backend")
+            emb = get_embedder(fold)
+            if emb.name != backend:
+                raise ValueError(f"Index built with {backend}, current backend is {emb.name}: rebuild with "
+                                 "--build-embeddings --rebuild")
+            for qv in emb.embed(queries):
+                vec_best = np.maximum(vec_best, self._vector_scores(qv.astype(np.float32), mask))
+            n = min(pool, int(np.isfinite(vec_best).sum()))
+            if n:
+                top = np.argpartition(-vec_best, n - 1)[:n]
+                top = top[np.argsort(-vec_best[top])]
+                vec_rank = {int(i): r for r, i in enumerate(top)}
+        kw_rank: dict[int, int] = {}
+        if mode in ("hybrid", "keyword"):
+            match = keyword_match(queries, fold)
+            if match:
+                id_to_row = {m[0]: i for i, m in enumerate(meta)}
+                sql = ("SELECT f.rowid FROM chunks_fts f JOIN chunks ch ON ch.id=f.rowid WHERE chunks_fts MATCH ?")
+                args: list[Any] = [match]
+                if allowed is not None:
+                    import json
+                    sql += " AND ch.book IN (SELECT value FROM json_each(?))"
+                    args.append(json.dumps(sorted(allowed)))
+                sql += " ORDER BY bm25(chunks_fts) LIMIT ?"
+                args.append(pool)
+                with self._ro() as c:
+                    for r, (rid,) in enumerate(c.execute(sql, args)):
+                        if rid in id_to_row:
+                            kw_rank[id_to_row[rid]] = r
+        fused: dict[int, float] = {}
+        for i, r in vec_rank.items():
+            fused[i] = fused.get(i, 0.0) + 1.0 / (RRF_K + r + 1)
+        for i, r in kw_rank.items():
+            fused[i] = fused.get(i, 0.0) + 1.0 / (RRF_K + r + 1)
+        out = []
+        for i, sc in fused.items():
+            m = meta[i]
+            if m[6] in ("front", "back"):
+                sc *= FRONT_DEMOTION        # contents, praise, index...: keyword-dense, rarely the answer
+            v = float(vec_best[i]) if np.isfinite(vec_best[i]) else None
+            out.append({"book": m[1], "fmt": m[2], "off": m[3], "len": m[4], "heading": m[5], "kind": m[6],
+                        "score": sc, "vector": v, "keyword_rank": kw_rank.get(i),
+                        "low_confidence": (v is None or v < SIM_FLOOR) and i not in kw_rank if mode != "keyword" else False})
+        out.sort(key=lambda h: -h["score"])
+        return out[:k]
+
+    def book_centroids(self, book_id: int):
+        np = _np()
+        mat, meta = self._matrix()
+        rows = [i for i, m in enumerate(meta) if m[1] == book_id and m[6] == "body"] or \
+               [i for i, m in enumerate(meta) if m[1] == book_id]
+        if not rows:
+            raise ValueError(f"Book {book_id} is not in the embedding index (run --build-embeddings)")
+        centroid = mat[rows].astype(np.float32).mean(axis=0)
+        centroid /= (np.linalg.norm(centroid) or 1)
+        scores = self._vector_scores(centroid)  # cosine (int8 rows rescaled inside), comparable across books
+        best: dict[int, float] = {}
+        for i, sc in enumerate(scores):
+            b = meta[i][1]
+            if b != book_id and sc > best.get(b, -1e9):
+                best[b] = float(sc)
+        return best
