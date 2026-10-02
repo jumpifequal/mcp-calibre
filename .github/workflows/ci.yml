@@ -10,36 +10,51 @@ jobs:
         os: [windows-latest, ubuntu-latest]
         python: ["3.12", "3.13"]
     runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
     env:
       CALIBRE_MCP_DATA: ${{ github.workspace }}/.ci-data
+      CALIBRE_LIBRARY: ${{ github.workspace }}/tests/Calibre Library
+      PYTHONUTF8: "1"            # UTF-8 stdout on Windows runners (tests print accented text)
+      PYTHONIOENCODING: utf-8
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python }}
-      - run: pip install -r requirements.txt pymupdf numpy pillow
-      - run: python -m py_compile calibre_mcp.py
-      - name: semantic requirements install (no model download)
+      - name: environment
+        run: python -c "import sys, sqlite3, platform; print(platform.platform(), sys.version, 'sqlite', sqlite3.sqlite_version)"
+      - name: install
+        run: pip install -r requirements.txt pymupdf numpy pillow
+      - name: compile
+        run: python -m py_compile calibre_mcp.py mcpcalibre/*.py
+      - name: semantic requirements (no model download)
         run: |
           pip install -r requirements-semantic.txt
           python -c "from fastembed import TextEmbedding; import numpy; print('semantic deps ok')"
-      - run: python tests/make_fake_library.py
-      - name: sync + status + smoke
-        shell: bash
+      - name: test library
+        run: python tests/make_fake_library.py
+      - name: sync and status
         run: |
-          export CALIBRE_LIBRARY="$GITHUB_WORKSPACE/tests/Calibre Library"
           python calibre_mcp.py --sync
           python calibre_mcp.py --status
-          python tests/smoke_test.py
-          python tests/test_v4.py
-          python tests/test_v4_index.py
-          python tests/test_real_cases.py
-          python tests/test_snippets.py
-          python tests/test_figures.py
-          python tests/test_v5.py
+      - name: smoke
+        run: python tests/smoke_test.py
+      - name: test_v4
+        run: python tests/test_v4.py
+      - name: test_v4_index
+        run: python tests/test_v4_index.py
+      - name: test_real_cases
+        run: python tests/test_real_cases.py
+      - name: test_snippets
+        run: python tests/test_snippets.py
+      - name: test_figures
+        run: python tests/test_figures.py
+      - name: test_v5
+        run: python tests/test_v5.py
       - name: gallery in a real browser (Linux)
         if: runner.os == 'Linux'
-        shell: bash
         run: |
           pip install playwright && python -m playwright install --with-deps chromium
           python tests/test_gallery_browser.py

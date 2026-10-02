@@ -73,8 +73,20 @@ doc.save(add(51, "Pdf With Figures", "PDF"))
 # ---- MOBI-only book: reached through ebook-convert -> EPUB (fake converter copies a prepared EPUB)
 add(52, "Mobi Book", "MOBI").write_bytes(b"BOOKMOBI fake")
 prepared = Path(tempfile.mkdtemp()) / "conv.epub"; make_epub(prepared)
-fake = Path(tempfile.mkdtemp()) / "fake-ebook-convert"
-fake.write_text(f'#!/bin/sh\ncase "$2" in *.epub) cp "{prepared}" "$2";; *) echo text > "$2";; esac\n'); fake.chmod(0o755)
+# Portable stand-in for Calibre's ebook-convert: a Python script (wrapped in a .cmd on Windows, where a
+# shebang script cannot be executed). EPUB targets get the prepared EPUB; anything else gets text.
+_fdir = Path(tempfile.mkdtemp())
+(_fdir / "fake_convert.py").write_text(
+    "import shutil, sys\n"
+    "src, out = sys.argv[1], sys.argv[2]\n"
+    f"shutil.copy(r'{prepared}', out) if out.lower().endswith('.epub') else open(out, 'w').write('text')\n")
+if os.name == "nt":
+    fake = _fdir / "fake-ebook-convert.cmd"
+    fake.write_text(f'@"{sys.executable}" "{_fdir / "fake_convert.py"}" %*\r\n')
+else:
+    fake = _fdir / "fake-ebook-convert"
+    fake.write_text(f'#!{sys.executable}\n' + (_fdir / "fake_convert.py").read_text())
+    fake.chmod(0o755)
 os.environ["CALIBRE_EBOOK_CONVERT"] = str(fake)
 c.commit(); c.close()
 m.set_libraries([lib], Path(os.environ["CALIBRE_MCP_DATA"]))
