@@ -96,7 +96,7 @@ except ImportError:  # SDK v1
     from mcp.server.fastmcp.exceptions import ToolError  # type: ignore
 from mcp.types import CallToolResult, ImageContent, TextContent, ToolAnnotations
 
-__version__ = "5.0.0"
+__version__ = "5.0.1"
 
 # --------------------------------------------------------------------------- config
 FORMAT_PREF = ["EPUB", "KEPUB", "AZW3", "AZW", "MOBI", "FB2", "DOCX", "HTMLZ",
