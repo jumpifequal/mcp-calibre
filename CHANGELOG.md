@@ -1,5 +1,23 @@
 # Changelog
 
+**5.2.0 - OCR for scanned PDFs**
+
+- add: `--extract-missing` — OCRs scanned PDFs automatically (Tesseract), only on the pages without a text layer; the PDF is never modified.
+- add: `--extract-missing --books <ids> --force-ocr` — re-OCRs PDFs with a bad text layer; the new text takes precedence in reading and search.
+- add: install.ps1 — sets up OCR at first installation by default (Tesseract via winget, Italian/English language files); skip with `-NoOcr`.
+- add: requirements-ocr.txt and `--download-ocr-langs` — the Python dependency for OCR, with Tesseract setup instructions for Windows, Linux and macOS.
+- add: `--extract-missing` — books that fail are remembered and skipped until their files change; `--retry-failed` retries them.
+- add: semantic index report — books without text show their extraction error.
+- change: update_embeddings.bat — extracts missing texts (with OCR) before building the indexes.
+
+**5.1.0 - Semantic index report and selective rebuild**
+
+- add: `--embeddings-report` and calibre_semantic_index_report — list failed (with the error), missing, stale, empty, sparse, capped, no-text and orphan books, and check the index's integrity.
+- add: `--build-embeddings --books <ids>` and `--retry-failed` — re-embed only selected books, leaving the rest of the index untouched.
+- fix: `--build-embeddings` — an unexpected error on one book no longer stops the whole build; the error is recorded instead.
+- fix: `--build-embeddings` — books deleted from Calibre are removed from the index even when their text is still in Calibre's full-text database.
+- add: update_embeddings.bat — runs the semantic build, the figure index and the report in one step, passes options such as `--retry-failed` or `--books`, and saves the report to a file.
+
 **5.0.0 - Library curation, hybrid semantic search and book distillation**
 
 - add: calibre_quality_report — audits metadata: missing fields, file-name titles, invalid ISBNs, author name anomalies, unsorted author sort, author and tag variants, series gaps.

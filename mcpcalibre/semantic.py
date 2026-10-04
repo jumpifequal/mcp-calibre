@@ -193,7 +193,8 @@ class SemanticIndex:
         c.execute("PRAGMA journal_mode=WAL")
         c.executescript("""
             CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, val TEXT);
-            CREATE TABLE IF NOT EXISTS books (book INTEGER PRIMARY KEY, fmt TEXT, src_hash TEXT, n INTEGER);""")
+            CREATE TABLE IF NOT EXISTS books (book INTEGER PRIMARY KEY, fmt TEXT, src_hash TEXT, n INTEGER);
+            CREATE TABLE IF NOT EXISTS failures (book INTEGER PRIMARY KEY, fmt TEXT, error TEXT, at TEXT);""")
         return c
 
     def _schema_ok(self, c: sqlite3.Connection) -> bool:
@@ -205,6 +206,8 @@ class SemanticIndex:
         opts = ", content='', contentless_delete=1" if contentless else ""
         c.executescript(f"""
             DROP TABLE IF EXISTS chunks; DROP TABLE IF EXISTS chunks_fts; DELETE FROM books; DELETE FROM meta;
+            CREATE TABLE IF NOT EXISTS failures (book INTEGER PRIMARY KEY, fmt TEXT, error TEXT, at TEXT);
+            DELETE FROM failures;
             CREATE TABLE chunks (id INTEGER PRIMARY KEY, book INTEGER, fmt TEXT, off INTEGER, len INTEGER,
                                  heading TEXT, kind TEXT, vec BLOB);
             CREATE INDEX chunks_book ON chunks(book);
@@ -225,9 +228,13 @@ class SemanticIndex:
     def build(self, sources: Iterable[tuple[int, str, str]],
               prepare: Callable[[int, str], tuple[str, str, str, list[dict]]],
               fold: Callable[[str], str], max_books: int = 0, rebuild: bool = False,
-              progress: Callable[[str], None] = print) -> dict[str, Any]:
+              progress: Callable[[str], None] = print, only_books: Optional[set[int]] = None,
+              force: bool = False) -> dict[str, Any]:
         """sources: (book, fmt, src_hash). prepare(book, fmt) -> (text, title, authors, chapters).
-        Incremental: unchanged books are skipped; an index from an older schema is rebuilt."""
+        Incremental: unchanged books are skipped; an index from an older schema is rebuilt.
+        only_books restricts the work to those books (the rest of the index is left untouched);
+        force re-embeds them even if unchanged. A failing book never stops the build: its error is
+        recorded in the 'failures' table (see report()) and cleared when it later succeeds."""
         np = _np()
         sources = list(sources)
         emb = get_embedder(fold)
@@ -245,10 +252,12 @@ class SemanticIndex:
             c.executemany("INSERT OR REPLACE INTO meta VALUES (?,?)",
                           [("schema", SCHEMA), ("backend", emb.name), ("dim", str(emb.dim)), ("chunk", str(CHUNK))])
             have = dict(c.execute("SELECT book, src_hash FROM books"))
-            todo = [s for s in sources if have.get(s[0]) != s[2]]
-            unchanged = len(sources) - len(todo)
+            todo = [s for s in sources if have.get(s[0]) != s[2] or (force and only_books and s[0] in only_books)]
+            if only_books is not None:
+                todo = [s for s in todo if s[0] in only_books]
+            unchanged = len(sources) - len(todo) if only_books is None else len(only_books) - len(todo)
             live = {s[0] for s in sources}
-            gone = [b for b in have if b not in live]
+            gone = [b for b in have if b not in live] if only_books is None else []
             for b in gone:
                 self._drop_book(c, b)
             c.commit()
@@ -262,9 +271,13 @@ class SemanticIndex:
                     vecs = np.zeros((0, emb.dim), np.float32)
                     if inputs:
                         vecs = np.concatenate([emb.embed(inputs[j:j + 64]) for j in range(0, len(inputs), 64)])
-                except (ValueError, OSError) as exc:
+                except Exception as exc:  # noqa: BLE001 - one bad book must not stop the whole build
                     failed += 1
-                    progress(f"[{i}/{len(todo)}] book {book}: FAILED {exc}")
+                    msg = f"{type(exc).__name__}: {exc}"[:500]
+                    c.execute("INSERT OR REPLACE INTO failures VALUES (?,?,?,?)",
+                              (book, fmt, msg, time.strftime("%Y-%m-%d %H:%M:%S")))
+                    c.commit()
+                    progress(f"[{i}/{len(todo)}] book {book}: FAILED {msg}")
                     continue
                 self._drop_book(c, book)
                 q = np.clip(np.rint(vecs * 127), -127, 127).astype(np.int8)
@@ -273,12 +286,75 @@ class SemanticIndex:
                                     (book, fmt, ch["off"], len(ch["text"]), ch["heading"], ch["kind"], v.tobytes()))
                     c.execute("INSERT INTO chunks_fts(rowid, body) VALUES (?,?)", (cur.lastrowid, ch["text"]))
                 c.execute("INSERT OR REPLACE INTO books VALUES (?,?,?,?)", (book, fmt, h, len(chunks)))
+                c.execute("DELETE FROM failures WHERE book=?", (book,))
                 c.commit()
                 done += 1
                 progress(f"[{i}/{len(todo)}] book {book}: {len(chunks)} passages")
         self._cache = None
         return {"embedded": done, "failed": failed, "unchanged": unchanged, "removed": len(gone),
                 "backend": emb.name, "seconds": round(time.monotonic() - t0, 1)}
+
+    def failed_books(self) -> list[int]:
+        if not self.exists():
+            return []
+        with self._ro() as c:
+            if not c.execute("SELECT 1 FROM sqlite_master WHERE name='failures'").fetchone():
+                return []
+            return [r[0] for r in c.execute("SELECT book FROM failures ORDER BY book")]
+
+    def report(self, sources: dict[int, dict[str, Any]], library_ids: set[int],
+               integrity: bool = True) -> dict[str, Any]:
+        """Sanity check of the index against the current sources (read-only).
+        sources: {book: {fmt, hash, chars}} = books that HAVE text; library_ids = every book id."""
+        if not self.exists():
+            return {"built": False, "hint": "run  calibre_mcp.py --build-embeddings"}
+        with self._ro() as c:
+            meta = dict(c.execute("SELECT key, val FROM meta"))
+            books = {r[0]: {"fmt": r[1], "hash": r[2], "n": r[3]} for r in c.execute("SELECT book, fmt, src_hash, n FROM books")}
+            fails = {}
+            if c.execute("SELECT 1 FROM sqlite_master WHERE name='failures'").fetchone():
+                fails = {r[0]: {"fmt": r[1], "error": r[2], "at": r[3]} for r in c.execute("SELECT * FROM failures")}
+            integ: dict[str, Any] = {}
+            if integrity and self._schema_ok(c):
+                per_book = dict(c.execute("SELECT book, COUNT(*) FROM chunks GROUP BY book"))
+                dim = int(meta.get("dim", 0) or 0)
+                integ = {
+                    "sqlite_quick_check": c.execute("PRAGMA quick_check").fetchone()[0],
+                    "count_mismatch": sorted(b for b, v in books.items() if per_book.get(b, 0) != v["n"]),
+                    "orphan_passages": sorted(b for b in per_book if b not in books),
+                    "bad_vectors": c.execute("SELECT COUNT(*) FROM chunks WHERE length(vec) != ?", (dim,)).fetchone()[0],
+                    "passages": sum(per_book.values()),
+                }
+                integ["ok"] = (integ["sqlite_quick_check"] == "ok" and not integ["count_mismatch"]
+                               and not integ["orphan_passages"] and integ["bad_vectors"] == 0)
+        cats: dict[str, list[dict[str, Any]]] = {k: [] for k in
+            ("failed", "missing", "stale", "empty", "sparse", "capped", "no_text", "orphan")}
+        for b, f in sorted(fails.items()):
+            cats["failed"].append({"book_id": b, "format": f["fmt"], "error": f["error"], "at": f["at"]})
+        for b, src in sorted(sources.items()):
+            if b in fails:
+                continue
+            got = books.get(b)
+            if got is None:
+                cats["missing"].append({"book_id": b, "format": src["fmt"], "chars": src["chars"]})
+            elif got["hash"] != src["hash"]:
+                cats["stale"].append({"book_id": b, "format": src["fmt"]})
+            elif got["n"] == 0:
+                cats["empty"].append({"book_id": b, "format": got["fmt"], "chars": src["chars"]})
+            else:
+                expected = max(1, src["chars"] // (CHUNK - OVERLAP))
+                if got["n"] >= MAX_CHUNKS:
+                    cats["capped"].append({"book_id": b, "passages": got["n"], "chars": src["chars"]})
+                elif src["chars"] > 20_000 and got["n"] < expected * 0.5:
+                    cats["sparse"].append({"book_id": b, "passages": got["n"], "expected_about": expected,
+                                           "chars": src["chars"]})
+        for b in sorted(library_ids - set(sources)):
+            cats["no_text"].append({"book_id": b})
+        for b in sorted(set(books) - library_ids):
+            cats["orphan"].append({"book_id": b})
+        return {"built": True, "schema": meta.get("schema"), "backend": meta.get("backend"),
+                "indexed_books": len(books), "summary": {k: len(v) for k, v in cats.items()},
+                "categories": cats, "integrity": integ}
 
     @staticmethod
     def _drop_book(c: sqlite3.Connection, book: int) -> None:
@@ -287,6 +363,7 @@ class SemanticIndex:
             c.execute("DELETE FROM chunks_fts WHERE rowid=?", (cid,))
         c.execute("DELETE FROM chunks WHERE book=?", (book,))
         c.execute("DELETE FROM books WHERE book=?", (book,))
+        c.execute("DELETE FROM failures WHERE book=?", (book,))
 
     def _ro(self) -> sqlite3.Connection:
         return sqlite3.connect(f"{self.path.resolve().as_uri()}?mode=ro", uri=True)

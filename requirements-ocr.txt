@@ -1,0 +1,12 @@
+# OCR for scanned PDFs (calibre_mcp.py --extract-missing). Installed by default by install.ps1
+# (skip with -NoOcr). Manual install:  .venv\Scripts\python.exe -m pip install -r requirements-ocr.txt
+pymupdf>=1.23      # renders PDF pages to images for the OCR engine (AGPL-3.0)
+#
+# OCR also needs the Tesseract program, which is NOT a Python package (pip cannot install it):
+#   Windows        install.ps1 does it (winget install --id UB-Mannheim.TesseractOCR -e),
+#                  or the installer from https://github.com/UB-Mannheim/tesseract/wiki
+#   Debian/Ubuntu  sudo apt install tesseract-ocr
+#   macOS          brew install tesseract
+# Language files (Italian, English...) are downloaded by the server into its own folder, no admin rights:
+#   .venv\Scripts\python.exe calibre_mcp.py --download-ocr-langs ita,eng
+# (Linux/macOS alternatives: apt install tesseract-ocr-ita / brew install tesseract-lang)

@@ -79,6 +79,7 @@ from mcpcalibre import figures, highlight, htmlmd, semantic, structure  # noqa: 
 from mcpcalibre import isbn as isbnmod  # noqa: E402
 from mcpcalibre import legalgate, quality  # noqa: E402
 from mcpcalibre import figindex  # noqa: E402
+from mcpcalibre import ocr as ocrmod  # noqa: E402
 from mcpcalibre import query as cql  # noqa: E402
 
 try:  # hardened XML parsing if available (OPF/NCX come from untrusted ebooks)
@@ -96,7 +97,7 @@ except ImportError:  # SDK v1
     from mcp.server.fastmcp.exceptions import ToolError  # type: ignore
 from mcp.types import CallToolResult, ImageContent, TextContent, ToolAnnotations
 
-__version__ = "5.0.1"
+__version__ = "5.2.0"
 
 # --------------------------------------------------------------------------- config
 FORMAT_PREF = ["EPUB", "KEPUB", "AZW3", "AZW", "MOBI", "FB2", "DOCX", "HTMLZ",
@@ -537,6 +538,18 @@ def pdf_pages_markdown(path: str, start: int, end: int) -> Optional[list[dict[st
             for i, c in enumerate(chunks)]
 
 
+# OCR runs only inside the batch extractor (a book can take minutes: too long for a tool call)
+OCR_BATCH: dict[str, Any] = {"enabled": False, "force": set(), "progress": lambda m: None}
+_OCR_ENGINE: dict[str, Any] = {}
+
+
+def ocr_engine():
+    """Configured OCR engine or None; cached. Raises OcrError on an explicit but broken configuration."""
+    if "engine" not in _OCR_ENGINE:
+        _OCR_ENGINE["engine"] = ocrmod.get_engine(default_data_dir(), _program_files_dirs())
+    return _OCR_ENGINE["engine"]
+
+
 # --------------------------------------------------------------------------- library
 class Library:
     def __init__(self, root: Path, data_dir: Path):
@@ -869,8 +882,13 @@ class Library:
         if not avail:
             raise ValueError(f"Book {book_id} not found or has no formats")
         wanted = [fmt.upper()] if fmt else avail
+        forced = book_id in OCR_BATCH["force"]
+        if not forced:  # text recognised by OCR replaces a missing or bad text layer
+            hit = self.index.cached_ocr(book_id, self)
+            if hit and (not fmt or hit[1] == fmt.upper()):
+                return hit
         with self.calibre_fts() as f:
-            if f is not None:
+            if f is not None and not forced:
                 rows = {r["format"].upper(): r["id"] for r in f.execute(
                     "SELECT id, format FROM books_text WHERE book=? AND text_size>0", (book_id,))}
                 for w in wanted:
@@ -884,20 +902,23 @@ class Library:
             try:
                 p = self.format_path(book_id, w)
                 st = p.stat()
-                cached = self.index.cached_text(book_id, w, st.st_mtime, st.st_size)
+                cached = None if forced else self.index.cached_text(book_id, w, st.st_mtime, st.st_size)
                 if cached is not None:
                     return cached[0], w, f"cache:{cached[1]}"
-                text, src = self._extract(p, w)
+                text, src = self._extract(p, w, book_id)
                 if not text.strip():
-                    raise ValueError("no text extracted (scanned PDF without text layer? OCR needed)")
+                    raise ValueError("no text extracted: scanned PDF without a text layer. OCR it with  "
+                                     "calibre_mcp.py --extract-missing  (needs Tesseract: install.ps1)")
                 self.index.store_text(book_id, w, st.st_mtime, st.st_size, src, text)
                 return text, w, src
             except (ValueError, OSError, zipfile.BadZipFile, ET.ParseError, RuntimeError) as exc:
+                if forced and w == "PDF":
+                    raise
                 errors.append(f"{w}: {exc}")
                 log.info("extract book %s %s failed: %s", book_id, w, exc)
         raise ValueError(f"No extractable text for book {book_id}. " + " ; ".join(errors))
 
-    def _extract(self, p: Path, w: str) -> tuple[str, str]:
+    def _extract(self, p: Path, w: str, book_id: Optional[int] = None) -> tuple[str, str]:
         if w in ("EPUB", "KEPUB"):
             st = p.stat()
             try:
@@ -913,7 +934,22 @@ class Library:
         if w == "PDF":
             if _pdf_backend()[0]:
                 n = pdf_info(str(p))["page_count"]
-                return "\n\n".join(pg["text"] for pg in pdf_pages(str(p), 1, n)), "pdf-extract"
+                texts = [pg["text"] for pg in pdf_pages(str(p), 1, n)]
+                force = book_id in OCR_BATCH["force"]
+                if OCR_BATCH["enabled"] and (force or ocrmod.needs_ocr(texts)):
+                    eng = ocr_engine()
+                    if eng is None:
+                        raise ValueError("scanned PDF and no OCR engine: install Tesseract (install.ps1 sets it up) "
+                                         "or set CALIBRE_MCP_OCR_ENGINE")
+                    if _pdf_backend()[0] != "pymupdf":
+                        raise ValueError("OCR needs PyMuPDF to render pages: pip install pymupdf")
+                    langs = ocrmod.pick_languages(eng, (self.describe([book_id]) or [{}])[0].get("languages", [])
+                                                  if book_id else [])
+                    text, stats = ocrmod.ocr_pdf(str(p), eng, langs, force, OCR_BATCH["progress"])
+                    OCR_BATCH["progress"](f"    OCR done: {stats['ocr_pages']}/{stats['pages']} pages, "
+                                          f"{stats['languages']}, {stats['seconds']} s")
+                    return text, f"pdf-ocr:{eng.name}"
+                return "\n\n".join(texts), "pdf-extract"
             return convert_to_text(p), "ebook-convert"
         return convert_to_text(p), "ebook-convert"
 
@@ -942,6 +978,7 @@ class SideIndex:
                 c.execute("CREATE TABLE IF NOT EXISTS stem_state (rid INTEGER PRIMARY KEY)")
             self.has_stem = c.execute("SELECT 1 FROM sqlite_master WHERE name='fts_stem'").fetchone() is not None
             c.execute("CREATE VIRTUAL TABLE IF NOT EXISTS fts_vocab USING fts5vocab(fts, row)")  # df per term
+            c.execute("CREATE TABLE IF NOT EXISTS extract_failures (book INTEGER PRIMARY KEY, stamp TEXT, error TEXT, at TEXT)")
             c.execute("CREATE TABLE IF NOT EXISTS extracted (book INTEGER NOT NULL, fmt TEXT NOT NULL, "
                       "mtime REAL NOT NULL, size INTEGER NOT NULL, source TEXT NOT NULL, text TEXT NOT NULL, "
                       "PRIMARY KEY (book, fmt))")
@@ -992,12 +1029,40 @@ class SideIndex:
                           (book, fmt, mtime, size)).fetchone()
         return (r[0], r[1]) if r else None
 
+    def cached_ocr(self, book: int, lib: "Library") -> Optional[tuple[str, str, str]]:
+        """(text, fmt, source) of an OCR result still matching its file, else None."""
+        with self.ro() as c:
+            r = c.execute("SELECT fmt, mtime, size, text, source FROM extracted WHERE book=? AND source LIKE 'pdf-ocr%' "
+                          "ORDER BY rowid DESC LIMIT 1", (book,)).fetchone()
+        if not r:
+            return None
+        try:
+            st = lib.format_path(book, r[0]).stat()
+        except (ValueError, OSError):
+            return None
+        if st.st_mtime != r[1] or st.st_size != r[2]:
+            return None
+        return r[3], r[0], f"cache:{r[4]}"
+
+    def extract_failures(self) -> dict[int, tuple[str, str]]:
+        with self.ro() as c:
+            return {r[0]: (r[1], r[2]) for r in c.execute("SELECT book, stamp, error FROM extract_failures")}
+
+    def set_extract_failure(self, book: int, stamp: Optional[str], error: Optional[str] = None) -> None:
+        with self._rw() as c:
+            if stamp is None:
+                c.execute("DELETE FROM extract_failures WHERE book=?", (book,))
+            else:
+                c.execute("INSERT OR REPLACE INTO extract_failures VALUES (?,?,?,?)",
+                          (book, stamp, (error or "")[:500], time.strftime("%Y-%m-%d %H:%M:%S")))
+
     def store_text(self, book: int, fmt: str, mtime: float, size: int, source: str, text: str) -> None:
         rid = self.local_rid(book, fmt)
         with self._rw() as c:
             c.execute("INSERT OR REPLACE INTO extracted VALUES (?,?,?,?,?,?)", (book, fmt, mtime, size, source, text))
             self._put(c, rid, text)
-            c.execute("INSERT OR REPLACE INTO state VALUES (?,?,?,?)", (rid, book, fmt, f"local:{mtime}:{size}"))
+            mark = "ocr" if source.startswith("pdf-ocr") else "local"   # OCR text takes precedence (see text_for)
+            c.execute("INSERT OR REPLACE INTO state VALUES (?,?,?,?)", (rid, book, fmt, f"{mark}:{mtime}:{size}"))
 
     @contextlib.contextmanager
     def _rw(self) -> Iterator[sqlite3.Connection]:
@@ -1390,8 +1455,11 @@ def calibre_search_fulltext(
             item = {"book_id": b, "title": meta.get(b, {}).get("title"),
                     "authors": meta.get(b, {}).get("authors"), "format": fmt, "score": round(-sc, 3)}
             if snippets_per_book:
-                row = f.execute("SELECT searchable_text FROM books_text WHERE book=? AND format=? "
-                                "COLLATE NOCASE AND text_size>0", (b, fmt)).fetchone() if f is not None else None
+                ocr_hit = LIB.index.cached_ocr(b, LIB)
+                row = (ocr_hit[0],) if ocr_hit and ocr_hit[1] == fmt else None
+                if row is None and f is not None:
+                    row = f.execute("SELECT searchable_text FROM books_text WHERE book=? AND format=? "
+                                    "COLLATE NOCASE AND text_size>0", (b, fmt)).fetchone()
                 if row is None:
                     with LIB.index.ro() as sc:
                         row = sc.execute("SELECT text FROM extracted WHERE book=? AND fmt=?", (b, fmt)).fetchone()
@@ -2446,6 +2514,18 @@ def calibre_search_semantic(
     return out
 
 
+@tool("calibre_semantic_index_report")
+def calibre_semantic_index_report(
+    category: Annotated[Optional[Literal["failed", "missing", "stale", "empty", "sparse", "capped", "no_text",
+                                         "orphan"]], Field(description="Only this category")] = None,
+) -> dict[str, Any]:
+    """Sanity check of the semantic index: books whose embedding failed (with the error), books with
+    text but not indexed, outdated, empty or suspiciously sparse (damaged text), sampled because very
+    long, books with no text at all, and database integrity. Each category comes with the fix; books
+    can then be re-embedded selectively with  calibre_mcp.py --build-embeddings --books <ids>."""
+    return semantic_report(category)
+
+
 @tool("calibre_library_status")
 def calibre_library_status() -> dict[str, Any]:
     """Library size, format distribution, Calibre full-text indexing coverage and sidecar index state.
@@ -2481,10 +2561,24 @@ def status() -> dict[str, Any]:
         "stemming": STEMMING,
         "semantic_index": LIB.semantic.info(),
         "figure_index": LIB.figindex.info(),
+        "ocr": _ocr_status(),
         "markdown_pdf": _has_module("pymupdf4llm"),
         "libraries": list(LIBS),
     }
     return res
+
+
+def _ocr_status() -> dict[str, Any]:
+    try:
+        eng = ocr_engine()
+    except ocrmod.OcrError as exc:
+        return {"engine": None, "error": str(exc)}
+    if eng is None:
+        return {"engine": None, "hint": "install Tesseract (install.ps1 sets it up) to OCR scanned PDFs"}
+    out: dict[str, Any] = {"engine": eng.name, "languages": eng.languages()}
+    if isinstance(eng, ocrmod.TesseractEngine):
+        out.update(path=eng.exe, tessdata=eng.tessdata or "tesseract default")
+    return out
 
 
 def _has_module(name: str) -> bool:
@@ -2547,49 +2641,201 @@ def legal_gate_cli(folder: str, book_ids: list[int]) -> int:
     return 0 if rep_["pass"] else 1
 
 
-def build_embeddings(max_books: int = 0, rebuild: bool = False) -> None:
-    """Opt-in batch: embeds every book that has text in the sidecar index (Calibre FTS or cached)."""
+def _embedding_sources() -> tuple[list[tuple[int, str, str]], dict[int, dict[str, Any]]]:
+    """Books that have text (Calibre FTS or locally extracted), one text per book:
+    ([(book, fmt, hash)], {book: {fmt, hash, chars}})."""
     LIB.index.sync()
     with LIB.index.ro() as c:
         rows = c.execute("SELECT book, fmt, text_hash, rid FROM state ORDER BY book").fetchall()
+        local = dict(((b, f), n) for b, f, n in c.execute("SELECT book, fmt, length(text) FROM extracted"))
     best: dict[int, tuple[str, str, int]] = {}
     for book, fmt, h, rid in rows:  # one text per book: Calibre's own extraction first, then format rank
         cur = best.get(book)
-        if cur is None or (rid > 0, -_fmt_rank(fmt)) > (cur[2] > 0, -_fmt_rank(cur[0])):
+        rank = (h.startswith("ocr:"), rid > 0, -_fmt_rank(fmt))
+        if cur is None or rank > (cur[1].startswith("ocr:"), cur[2] > 0, -_fmt_rank(cur[0])):
             best[book] = (fmt, h, rid)
-    sources = [(b, f, h) for b, (f, h, _) in best.items()]
+    sizes: dict[int, int] = {}
+    with LIB.calibre_fts() as f:
+        if f is not None:
+            sizes = dict(f.execute("SELECT id, text_size FROM books_text"))
+    with LIB.meta() as c:   # text can outlive its book (stale FTS rows): only books still in the library count
+        live = {r[0] for r in c.execute("SELECT id FROM books")}
+    details = {b: {"fmt": fm, "hash": h, "chars": sizes.get(rid, 0) if rid > 0 else local.get((b, fm), 0)}
+               for b, (fm, h, rid) in best.items() if b in live}
+    return [(b, d["fmt"], d["hash"]) for b, d in details.items()], details
+
+
+def build_embeddings(max_books: int = 0, rebuild: bool = False, books: Optional[list[int]] = None,
+                     retry_failed: bool = False) -> None:
+    """Opt-in batch: embeds every book that has text in the sidecar index (Calibre FTS or cached).
+    books / retry_failed: re-embed only those books (forced), leaving the rest of the index untouched."""
+    sources, _details = _embedding_sources()
+    only: Optional[set[int]] = None
+    if books or retry_failed:
+        only = set(books or [])
+        if retry_failed:
+            only |= set(LIB.semantic.failed_books())
+        if not only:
+            print(json.dumps({"note": "nothing to do: no failed books recorded"}, indent=2))
+            return
+        no_text = sorted(only - {s_[0] for s_ in sources})
+        if no_text:
+            print(f"note: no extracted text for book(s) {no_text}: run --extract-missing or let Calibre index them",
+                  file=sys.stderr)
 
     def prepare(book: int, fmt: str) -> tuple[str, str, str, list[dict]]:
         cmap, text, _f, _src = book_chapters(book, fmt)
         d = (LIB.describe([book]) or [{}])[0]
         return text, d.get("title") or "", ", ".join(d.get("authors") or []), cmap["chapters"]
-    res = LIB.semantic.build(sources, prepare, fold, max_books=max_books,
-                             rebuild=rebuild, progress=lambda m: print(m, file=sys.stderr))
+    res = LIB.semantic.build(sources, prepare, fold, max_books=max_books, rebuild=rebuild,
+                             progress=lambda m: print(m, file=sys.stderr), only_books=only, force=bool(only))
+    if res.get("failed"):
+        res["next_step"] = "inspect with --embeddings-report, fix, then --build-embeddings --retry-failed"
     print(json.dumps(res, indent=2))
 
 
-def extract_missing(max_books: int = 0) -> None:
-    """Batch fallback for books without Calibre FTS text. Resumable: cached books are skipped."""
+_REPORT_ACTIONS = {
+    "failed": "Embedding failed (error recorded). Fix the cause in Calibre (format, OCR, conversion), then "
+              "--build-embeddings --books <ids> (or --retry-failed).",
+    "missing": "Has text but is not in the index yet: --build-embeddings (or --books <ids>).",
+    "stale": "Text changed since it was indexed: --build-embeddings refreshes it.",
+    "empty": "Indexed with zero passages: the text is too short or not real text (images only?). "
+             "Check with calibre_read_text.",
+    "sparse": "Far fewer passages than its text length suggests: the extracted text is probably damaged "
+              "(layout noise, broken encoding). Check with calibre_read_text, fix the format, then --books <ids>.",
+    "capped": "Very long book: sampled to CALIBRE_MCP_EMBED_MAX_CHUNKS passages. Raise it and use --books <ids> "
+              "for full coverage.",
+    "no_text": "No extracted text at all: --extract-missing (OCRs scanned PDFs automatically when Tesseract is "
+               "installed), then --build-embeddings. Books with a recorded error are retried with --retry-failed.",
+    "orphan": "Deleted from Calibre: removed at the next full --build-embeddings.",
+}
+
+
+def semantic_report(category: Optional[str] = None) -> dict[str, Any]:
+    _sources, details = _embedding_sources()
+    with LIB.meta() as c:
+        ids = {r[0] for r in c.execute("SELECT id FROM books")}
+    rep_ = LIB.semantic.report(details, ids)
+    if not rep_.get("built"):
+        return rep_
+    ext_fail = LIB.index.extract_failures()
+    for x in rep_["categories"].get("no_text", []):
+        if x["book_id"] in ext_fail:
+            x["error"] = ext_fail[x["book_id"]][1]
+    titles = {b["id"]: b.get("title") for b in LIB.describe(sorted({x["book_id"] for v in rep_["categories"].values()
+                                                                    for x in v if x["book_id"] in ids}))}
+    for v in rep_["categories"].values():
+        for x in v:
+            x["title"] = titles.get(x["book_id"])
+    if category:
+        if category not in rep_["categories"]:
+            raise ValueError(f"Unknown category {category!r}. Available: {', '.join(rep_['categories'])}")
+        rep_["categories"] = {category: rep_["categories"][category]}
+    rep_["actions"] = {k: _REPORT_ACTIONS[k] for k, v in rep_["categories"].items() if v}
+    return rep_
+
+
+def print_semantic_report(as_json: bool) -> None:
+    rep_ = semantic_report()
+    if as_json or not rep_.get("built"):
+        print(json.dumps(rep_, indent=2, ensure_ascii=False))
+        return
+    i = rep_["integrity"]
+    print(f"Semantic index: {rep_['indexed_books']} books, {i.get('passages', '?')} passages, backend {rep_['backend']}, "
+          f"schema {rep_['schema']}")
+    print(f"Integrity: {'OK' if i.get('ok') else 'PROBLEMS'}  (quick_check={i.get('sqlite_quick_check')}, "
+          f"count mismatches={len(i.get('count_mismatch', []))}, orphan passages={len(i.get('orphan_passages', []))}, "
+          f"bad vectors={i.get('bad_vectors')})")
+    for cat, items in rep_["categories"].items():
+        if not items:
+            continue
+        print(f"\n[{cat}] {len(items)} book(s) - {_REPORT_ACTIONS[cat]}")
+        for x in items[:50]:
+            extra = x.get("error") or (f"{x['passages']} passages / {x['chars']} chars" if "passages" in x else "")
+            print(f"  {x['book_id']:>6}  {(x.get('title') or '')[:60]:60s}  {extra}")
+        if len(items) > 50:
+            print(f"  ... {len(items) - 50} more (use --json)")
+        ids = ",".join(str(x["book_id"]) for x in items[:200])
+        if cat in ("failed", "sparse", "capped", "missing", "stale"):
+            print(f"  re-run only these: calibre_mcp.py --build-embeddings --books {ids}")
+
+
+def _book_stamp(book: int) -> str:
+    """Changes when any of the book's files changes: a remembered failure is retried after a fix."""
+    parts = []
+    for fm in LIB.formats(book):
+        with contextlib.suppress(ValueError, OSError):
+            st = LIB.format_path(book, fm).stat()
+            parts.append(f"{fm}:{st.st_mtime:.0f}:{st.st_size}")
+    return "|".join(parts)
+
+
+def extract_missing(max_books: int = 0, use_ocr: bool = True, books: Optional[list[int]] = None,
+                    force_ocr: bool = False, retry_failed: bool = False) -> dict[str, Any]:
+    """Batch extraction for books without text (Calibre has not indexed them, or they are scanned PDFs).
+    Scanned PDFs are OCRed automatically when an engine is available. Books that failed before are
+    skipped until one of their files changes (or with retry_failed). force_ocr re-OCRs the given books'
+    PDFs even if they already have text (e.g. a bad text layer); their OCR text then takes precedence."""
+    if force_ocr and not books:
+        raise ValueError("--force-ocr needs --books <ids>")
     LIB.index.sync()
     with LIB.index.ro() as c:
         done = {r[0] for r in c.execute("SELECT DISTINCT book FROM state")}
     with LIB.meta() as c:
-        todo = [r[0] for r in c.execute("SELECT id FROM books ORDER BY id") if r[0] not in done]
+        ids = [r[0] for r in c.execute("SELECT id FROM books ORDER BY id")]
+    if books:
+        todo = [b for b in books if b in set(ids) and (force_ocr or b not in done)]
+    else:
+        todo = [b for b in ids if b not in done]
+    known = LIB.index.extract_failures()
+    skipped = 0
+    if not retry_failed and not force_ocr:
+        keep = []
+        for b in todo:
+            if b in known and known[b][0] == _book_stamp(b):
+                skipped += 1
+                continue
+            keep.append(b)
+        todo = keep
     if max_books:
         todo = todo[:max_books]
-    ok = fail = 0
-    t0 = time.monotonic()
-    for i, b in enumerate(todo, 1):
+    engine_note = None
+    if use_ocr:
         try:
-            _, fmt, src = LIB.text_for(b)
-            ok += 1
-            print(f"[{i}/{len(todo)}] book {b}: {fmt} via {src}", file=sys.stderr)
-        except ValueError as exc:
-            fail += 1
-            print(f"[{i}/{len(todo)}] book {b}: FAILED {exc}", file=sys.stderr)
-        time.sleep(THROTTLE * 20)
-    print(json.dumps({"processed": len(todo), "ok": ok, "failed": fail,
-                      "seconds": round(time.monotonic() - t0, 1)}, indent=2))
+            eng = ocr_engine()
+            engine_note = eng.name if eng else "none (install Tesseract: install.ps1)"
+        except ocrmod.OcrError as exc:
+            engine_note = f"unavailable: {exc}"
+    print(f"OCR engine: {engine_note if use_ocr else 'disabled (--no-ocr)'}", file=sys.stderr)
+    OCR_BATCH.update(enabled=use_ocr, force=set(todo) if force_ocr else set(),
+                     progress=lambda m: print(m, file=sys.stderr))
+    ok = fail = ocr_books = 0
+    t0 = time.monotonic()
+    try:
+        for i, b in enumerate(todo, 1):
+            try:
+                _, fmt, src = LIB.text_for(b, "PDF" if force_ocr else None)
+                ok += 1
+                ocr_books += src.startswith("pdf-ocr")
+                LIB.index.set_extract_failure(b, None)
+                print(f"[{i}/{len(todo)}] book {b}: {fmt} via {src}", file=sys.stderr)
+            except Exception as exc:  # noqa: BLE001 - one bad book must not stop the batch
+                fail += 1
+                LIB.index.set_extract_failure(b, _book_stamp(b), f"{type(exc).__name__}: {exc}")
+                print(f"[{i}/{len(todo)}] book {b}: FAILED {exc}", file=sys.stderr)
+            time.sleep(THROTTLE * 20)
+    finally:
+        OCR_BATCH.update(enabled=False, force=set())
+    res = {"processed": len(todo), "ok": ok, "ocr_books": ocr_books, "failed": fail,
+           "skipped_known_failures": skipped, "ocr_engine": engine_note if use_ocr else "disabled",
+           "seconds": round(time.monotonic() - t0, 1)}
+    if fail or skipped:
+        res["next_step"] = ("failures are remembered and skipped until the book's files change; "
+                            "--extract-missing --retry-failed retries them")
+    if ok:
+        res["then"] = "run --build-embeddings to add the new texts to semantic search"
+    print(json.dumps(res, indent=2))
+    return res
 
 
 # --------------------------------------------------------------------------- MCP resources & prompts
@@ -2779,6 +3025,17 @@ def main() -> None:
     ap.add_argument("--build-embeddings", action="store_true",
                     help="Build/refresh the opt-in semantic index (CPU heavy, incremental), then exit")
     ap.add_argument("--rebuild", action="store_true", help="With --build-embeddings: discard and rebuild")
+    ap.add_argument("--books", help="With --build-embeddings / --extract-missing: only these book ids, comma-separated")
+    ap.add_argument("--retry-failed", action="store_true",
+                    help="With --build-embeddings / --extract-missing: retry the books that failed before")
+    ap.add_argument("--no-ocr", action="store_true", help="With --extract-missing: do not OCR scanned PDFs")
+    ap.add_argument("--force-ocr", action="store_true",
+                    help="With --extract-missing --books: OCR these PDFs even if they have a (bad) text layer")
+    ap.add_argument("--download-ocr-langs", metavar="LANGS",
+                    help="Download Tesseract language files, e.g. ita,eng (setup step), then exit")
+    ap.add_argument("--embeddings-report", action="store_true",
+                    help="Sanity check of the semantic index (failed/missing/stale/empty/sparse books, integrity)")
+    ap.add_argument("--json", action="store_true", help="With --embeddings-report: machine-readable output")
     ap.add_argument("--index-figures", action="store_true",
                     help="Build/refresh the figure-caption index for calibre_search_figures, then exit")
     ap.add_argument("--legal-gate", metavar="DIR", help="Check a skill/notes folder against --book sources, then exit")
@@ -2802,6 +3059,14 @@ def main() -> None:
     data_dir = default_data_dir()
     _setup_logging(data_dir)
     semantic.MODEL_DIR = data_dir / "models"
+    if a.download_ocr_langs:  # setup step, no library needed
+        try:
+            res = ocrmod.download_languages(data_dir / "tessdata", re.split(r"[,+\s]+", a.download_ocr_langs))
+            print(json.dumps(res, indent=2))
+        except ocrmod.OcrError as exc:
+            print(f"ERROR: {exc}", file=sys.stderr)
+            raise SystemExit(1)
+        return
     if a.download_model:  # before library loading: setup step, no library needed
         try:
             print(json.dumps(semantic.prefetch_model(fold), indent=2))
@@ -2814,16 +3079,25 @@ def main() -> None:
         print(json.dumps(status(), indent=2, ensure_ascii=False))
         return
     if a.extract_missing:
-        extract_missing(a.max_books)
+        ids = [int(x) for x in re.split(r"[,\s]+", a.books.strip()) if x] if a.books else None
+        try:
+            extract_missing(a.max_books, not a.no_ocr, ids, a.force_ocr, a.retry_failed)
+        except ValueError as exc:
+            print(f"ERROR: {exc}", file=sys.stderr)
+            raise SystemExit(2)
         return
     if a.index_figures:
         index_figures(a.max_books)
         return
     if a.legal_gate:
         raise SystemExit(legal_gate_cli(a.legal_gate, a.book or []))
+    if a.embeddings_report:
+        print_semantic_report(a.json)
+        return
     if a.build_embeddings:
         try:
-            build_embeddings(a.max_books, a.rebuild)
+            ids = [int(x) for x in re.split(r"[,\s]+", a.books.strip()) if x] if a.books else None
+            build_embeddings(a.max_books, a.rebuild, ids, a.retry_failed)
         except ValueError as exc:
             print(f"ERROR: {exc}", file=sys.stderr)
             raise SystemExit(1)

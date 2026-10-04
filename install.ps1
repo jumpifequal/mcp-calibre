@@ -16,6 +16,16 @@
 .PARAMETER SkipSync
   Skip the initial full-text index build.
 
+.PARAMETER NoOcr
+  Skip the OCR setup. By default the installer sets up OCR for scanned PDFs: requirements-ocr.txt
+  (PyMuPDF), the Tesseract program (winget, if missing) and its language files (-OcrLangs) in
+  %LOCALAPPDATA%\calibre-mcp\tessdata (no admin rights). Afterwards "calibre_mcp.py --extract-missing"
+  OCRs scanned PDFs automatically. OCR needs PyMuPDF: with -Pdf pypdf or -Pdf none it is skipped.
+  (-Ocr is still accepted for backward compatibility and has no effect.)
+
+.PARAMETER OcrLangs
+  Tesseract languages to download, comma-separated (default: ita,eng).
+
 .PARAMETER NoSemantic
   Skip the semantic-search dependencies (requirements-semantic.txt: numpy, fastembed, ~28 packages) and the
   model download (~220 MB, once, into %LOCALAPPDATA%\calibre-mcp\models). Both happen by default; the index
@@ -33,6 +43,9 @@ param(
     [switch]$Register,
     [switch]$SkipSync,
     [switch]$NoSemantic,
+    [switch]$NoOcr,
+    [switch]$Ocr,      # deprecated: OCR is now set up by default
+    [string]$OcrLangs = 'ita,eng',
     [switch]$Semantic   # deprecated: semantic deps are now the default
 )
 $ErrorActionPreference = 'Stop'
@@ -91,6 +104,32 @@ if (-not $NoSemantic) {
     }
 }
 Write-Host "[+] Dependencies installed (PDF backend: $Pdf)"
+
+if (-not $NoOcr) {
+    # Non-blocking: OCR problems never break the core install.
+    if ($Pdf -ne 'pymupdf') {
+        Write-Warning "OCR skipped: it needs PyMuPDF to render pages, which -Pdf $Pdf excludes. Use -Pdf pymupdf to enable it."
+    } else {
+        & $py -m pip install --disable-pip-version-check -q -r (Join-Path $here 'requirements-ocr.txt')
+        $tessPaths = @("$env:ProgramFiles\Tesseract-OCR\tesseract.exe", "${env:ProgramFiles(x86)}\Tesseract-OCR\tesseract.exe",
+                       "$env:LOCALAPPDATA\Programs\Tesseract-OCR\tesseract.exe")
+        $findTess = { (Get-Command tesseract -ErrorAction SilentlyContinue) -or ($tessPaths | Where-Object { $_ -and (Test-Path $_) }) }
+        if (& $findTess) {
+            Write-Host "[+] Tesseract already installed"
+        } elseif (Get-Command winget -ErrorAction SilentlyContinue) {
+            Write-Host "[*] Installing Tesseract OCR (winget, UB-Mannheim build; Windows may ask for confirmation)..."
+            winget install --id UB-Mannheim.TesseractOCR -e --accept-package-agreements --accept-source-agreements
+            if (& $findTess) { Write-Host "[+] Tesseract installed" }
+            else { Write-Warning "Tesseract not found after winget: install it from https://github.com/UB-Mannheim/tesseract/wiki" }
+        } else {
+            Write-Warning "winget not available: install Tesseract from https://github.com/UB-Mannheim/tesseract/wiki"
+        }
+        Write-Host "[*] Downloading OCR language files ($OcrLangs)..."
+        & $py $server --download-ocr-langs $OcrLangs
+        if ($LASTEXITCODE -ne 0) { Write-Warning "OCR language download failed (proxy? set HTTPS_PROXY); retry: $py $server --download-ocr-langs $OcrLangs" }
+        elseif (& $findTess) { Write-Host "[+] OCR ready: scanned PDFs are OCRed by  $py $server --extract-missing" }
+    }
+}
 
 $envVars = @{}
 if ($Library) {

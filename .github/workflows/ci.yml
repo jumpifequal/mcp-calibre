@@ -53,6 +53,14 @@ jobs:
         run: python tests/test_figures.py
       - name: test_v5
         run: python tests/test_v5.py
+      - name: test_index_report
+        run: python tests/test_index_report.py
+      - name: OCR (Tesseract, Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update -q && sudo apt-get install -y -q tesseract-ocr
+          pip install -r requirements-ocr.txt
+          python tests/test_ocr.py
       - name: gallery in a real browser (Linux)
         if: runner.os == 'Linux'
         run: |

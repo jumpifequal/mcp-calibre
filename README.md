@@ -47,9 +47,9 @@ flowchart LR
   end
   subgraph SV["calibre_mcp.py — read-only MCP server"]
     TR["Transports<br/>stdio · Streamable HTTP (bearer, Host/Origin checks, TLS)"]
-    RG["MCP surface<br/>29 tools · 4 resources · 5 prompts · gallery UI<br/>per-call library selection"]
+    RG["MCP surface<br/>30 tools · 4 resources · 5 prompts · gallery UI<br/>per-call library selection"]
     QM["Metadata & curation<br/>query.py · quality.py · isbn.py"]
-    TX["Text access<br/>extraction chain · structure.py · htmlmd.py"]
+    TX["Text access<br/>extraction chain · OCR · structure.py · htmlmd.py · ocr.py"]
     SE["Search<br/>FTS5 · highlight.py · semantic.py"]
     FG["Figures & images<br/>figures.py · figindex.py · ui/gallery.html"]
     LG["legalgate.py"]
@@ -105,6 +105,7 @@ sidecar cache.
 | `mcpcalibre/semantic.py` | Embedding backends, chapter-bounded contextual passages, int8 vector store, hybrid search with RRF |
 | `mcpcalibre/figures.py` | Figure listing/extraction for EPUB and PDF, page rendering, safe image decoding |
 | `mcpcalibre/figindex.py` | Library-wide caption index for figure search |
+| `mcpcalibre/ocr.py` | Tesseract OCR: page selection, language choice, language-file download |
 | `mcpcalibre/legalgate.py` | Overlap, quote, compression, heading and attribution checks for derived notes |
 | `mcpcalibre/ui/gallery.html` | MCP Apps view: inline image gallery with Copy/Save PNG |
 
@@ -119,6 +120,7 @@ sidecar cache.
 | `embeddings.db` | sidecar | this server | passages (offset, chapter, kind), int8 vectors, passage FTS5 | `--build-embeddings` (incremental; `--rebuild`) |
 | `figures.db` | sidecar | this server | figure captions and alt text, optional caption vectors | `--index-figures` (incremental) |
 | `models/` | sidecar root | this server | embedding model cache | `--download-model` (setup) |
+| `tessdata/` | sidecar root | this server | Tesseract language files | `install.ps1` / `--download-ocr-langs` |
 | `converted/` | sidecar | this server | EPUB copies of LIT/MOBI/AZW3 books, made to reach their figures | on demand, by file stamp |
 
 The sidecar lives in `%LOCALAPPDATA%\calibre-mcp\<library-hash>\` (one folder per library). Deleting it is
@@ -204,7 +206,8 @@ For each book, in order:
    - EPUB: built-in parser, tolerant of broken container/OPF/spine/TOC (problems become `warnings`);
    - PDF: PyMuPDF or pypdf, no page limit;
    - TXT: read directly;
-   - anything else (LIT, MOBI, AZW3, RTF, DOC, ODT…): Calibre's `ebook-convert`.
+   - anything else (LIT, MOBI, AZW3, RTF, DOC, ODT…): Calibre's `ebook-convert`;
+4. OCR, for scanned PDFs, in the batch command `--extract-missing` only (see [OCR for scanned PDFs](#ocr-for-scanned-pdfs)).
 
 If one format fails, the next one is tried. Extracted text is cached **and indexed**, so a book read once also
 becomes findable through `calibre_search_fulltext`. Scanned PDFs without a text layer return an explicit
@@ -223,6 +226,24 @@ To close the gap without leaving Calibre open, run the batch extractor (low prio
 ```
 
 ## Installation (Windows)
+
+### Requirements
+
+| Component | Needed for | Installed by |
+|---|---|---|
+| Windows 10/11 (macOS and Linux also work, with manual setup) | — | — |
+| **Python ≥ 3.10, 64-bit** (3.12+ recommended) from python.org | everything | you, before running `install.ps1` |
+| **Calibre**, with full-text indexing enabled | text of most books; `ebook-convert` for LIT/MOBI/AZW3… | you |
+| `requirements.txt`: `mcp`, `pydantic`, `defusedxml` | the server | `install.ps1` |
+| PyMuPDF (`-Pdf pymupdf`, default) or pypdf | PDF reading and figures | `install.ps1` |
+| `requirements-semantic.txt`: `numpy`, `fastembed` + the embedding model (~220 MB) | semantic search | `install.ps1` (skip: `-NoSemantic`) |
+| `requirements-ocr.txt`: PyMuPDF + the **Tesseract** program + language files (`ita`, `eng`) | OCR of scanned PDFs | `install.ps1` (skip: `-NoOcr`); Tesseract through `winget` |
+
+Tesseract is a separate program, not a Python package. `install.ps1` installs it with
+`winget install --id UB-Mannheim.TesseractOCR -e` (Windows may ask for confirmation). Without winget, use the
+installer from <https://github.com/UB-Mannheim/tesseract/wiki>. On Linux: `sudo apt install tesseract-ocr`; on macOS:
+`brew install tesseract`. Language files are then fetched with `calibre_mcp.py --download-ocr-langs ita,eng`.
+Every optional part is non-blocking: if it fails, the core server still installs and works.
 
 ```powershell
 git clone https://github.com/jumpifequal/mcp-calibre C:\Tools\mcp-calibre
@@ -256,7 +277,7 @@ powershell -ExecutionPolicy Bypass -File .\install.ps1 -Library "D:\Books\Calibr
 Then fully restart Claude Desktop (quit from the tray icon, not just close the window).
 
 CLI: `python calibre_mcp.py --status` · `--sync` · `--extract-missing [--max-books N]` ·
-`--build-embeddings [--max-books N] [--rebuild]` · `--index-figures` · `--legal-gate DIR --book ID` · `--download-model` · `--library <path>` · `--transport http` (see below) · `--gen-token`.
+`--build-embeddings [--max-books N] [--rebuild] [--books IDS] [--retry-failed]` · `--embeddings-report [--json]` · `--extract-missing [--books IDS] [--force-ocr] [--no-ocr] [--retry-failed]` · `--download-ocr-langs ita,eng` · `--index-figures` · `--legal-gate DIR --book ID` · `--download-model` · `--library <path>` · `--transport http` (see below) · `--gen-token`.
 
 ## OpenAI clients: ChatGPT desktop app, Codex CLI, Codex IDE extension
 
@@ -398,6 +419,7 @@ All tools are read-only and accept an optional `library` argument when several l
 | `calibre_quality_report` | Metadata audit: missing fields, file-name titles, invalid ISBNs, author name anomalies, unsorted author sort, same author or tag written differently, series gaps |
 | `calibre_find_isbn` | Finds the book's ISBN in its own text (copyright page first), checksum-validated, compared with the stored one |
 | `calibre_compare_books` | Field-by-field comparison of possible duplicates, with a suggestion of which record to keep; flags translations |
+| `calibre_semantic_index_report` | Sanity check of the semantic index: failed (with the error), missing, stale, empty, sparse, capped, no-text and orphan books, plus database integrity; each with its fix |
 | `calibre_search_figures` | Finds figures across the library by caption and alt text (keyword, plus meaning with the semantic model) |
 | `calibre_check_overlap` | Legal gate: checks that notes derived from books do not reproduce them (verbatim overlap, quotes, compression, heading mirroring, attribution) |
 | `calibre_list_facets` | Authors/tags/series/publishers/languages/formats with book counts |
@@ -495,6 +517,36 @@ bibliography, notes…), using its title and, for ambiguous titles such as ackno
 passages (they never cross a chapter), front-matter demotion, and the legal gate's heading check.
 `calibre_get_toc` / `calibre_read_section` remain available for EPUB sections and PDF page ranges.
 
+## OCR for scanned PDFs
+
+Scanned PDFs have no text layer, so Calibre cannot index them and they stay invisible to search. With an OCR
+engine installed, `--extract-missing` recognises them **automatically**: only the pages without text are
+processed (pages with a text layer are kept as they are), and the result goes to the server's cache like any
+other extraction. The PDF is never modified. After that, full-text search, chapters and (after
+`--build-embeddings`) semantic search work on those books too.
+
+```powershell
+.\install.ps1                                                       # sets up OCR by default: Tesseract (winget) + ita/eng
+.venv\Scripts\python.exe calibre_mcp.py --extract-missing            # OCRs scanned PDFs, remembers failures
+.venv\Scripts\python.exe calibre_mcp.py --build-embeddings           # adds the new texts to semantic search
+```
+
+| Engine (`CALIBRE_MCP_OCR_ENGINE`) | Speed on CPU | Faithfulness | Notes |
+|---|---|---|---|
+| `tesseract` (default when installed) | ~1–3 s per page | high: it transcribes, never invents | language from the book's Calibre language, else `ita+eng`; language files downloaded by `install.ps1` into `%LOCALAPPDATA%\calibre-mcp\tessdata` |
+| `none` | — | — | OCR disabled |
+
+**PDFs with a bad text layer** (an old, garbled OCR) look indexed but read as nonsense. Re-OCR them explicitly; the
+new text then takes precedence over Calibre's for reading, full-text and semantic search:
+
+```powershell
+.venv\Scripts\python.exe calibre_mcp.py --extract-missing --books 812,977 --force-ocr
+```
+
+OCR runs only in this batch command, never inside a chat request (a whole book takes minutes). Books that fail
+are remembered and skipped until one of their files changes; `--retry-failed` tries them again. The semantic
+index report shows their error under `no_text`.
+
 ## Optional features
 
 **Several libraries.** Set `CALIBRE_LIBRARIES` to paths separated by `;` on Windows (`:` elsewhere); the first is
@@ -528,6 +580,41 @@ default, `CALIBRE_MCP_EMBED_THREADS`); later builds only process new or changed 
 
 **Upgrading from 4.x:** the index format changed. Run `--build-embeddings` once: it detects the old index and
 rebuilds it; until then semantic search says so instead of returning stale results.
+
+**Checking and repairing the semantic index.** A build never stops on a problematic book: the book is skipped
+and its error is recorded. To see what the index contains and what went wrong:
+
+```powershell
+.venv\Scripts\python.exe calibre_mcp.py --embeddings-report          # readable; --json for scripts
+```
+
+(or ask the assistant: it calls `calibre_semantic_index_report`). The report checks the index against the
+current library and groups books by problem, each with its fix:
+
+| Category | Meaning | What to do |
+|---|---|---|
+| `failed` | embedding failed; the error is shown (e.g. a format deleted in Calibre, a damaged file) | fix the cause in Calibre, then `--build-embeddings --retry-failed` |
+| `missing` | the book has text but is not indexed yet | `--build-embeddings` (or `--books <ids>`) |
+| `stale` | the book's text changed after it was indexed | `--build-embeddings` refreshes it |
+| `empty` | indexed with zero passages: almost no real text (images only, covers) | check with `calibre_read_text` |
+| `sparse` | far fewer passages than its text length suggests: the extracted text is probably damaged (layout noise, broken encoding) | check with `calibre_read_text`, fix or convert the format in Calibre, then `--books <ids>` |
+| `capped` | very long book, sampled to `CALIBRE_MCP_EMBED_MAX_CHUNKS` passages | raise the limit and re-run `--books <ids>` |
+| `no_text` | no extracted text at all | let Calibre index it, or `--extract-missing`, then build |
+| `orphan` | deleted from Calibre but still in the index | removed by the next full `--build-embeddings` |
+
+It also checks the database itself (SQLite integrity, passage counts per book, vector sizes). Each category
+prints the exact command to re-process only its books, for example:
+
+```powershell
+.venv\Scripts\python.exe calibre_mcp.py --build-embeddings --books 81,82,89   # only these, forced
+.venv\Scripts\python.exe calibre_mcp.py --build-embeddings --retry-failed     # only the failed ones
+```
+
+A targeted run never removes or re-embeds the other books.
+
+For routine updates, `update_embeddings.bat` runs the three steps in order (incremental semantic build, figure
+index, report) and saves the report to `%LOCALAPPDATA%\calibre-mcp\embeddings-report.txt`. Options are passed to
+the build: `update_embeddings.bat --retry-failed`, `update_embeddings.bat --books 81,82`; `/?` shows the help.
 
 **Figure search.** `calibre_mcp.py --index-figures` indexes the captions and alt text of EPUB and PDF figures
 (incremental; with the semantic model, captions are also embedded). Then `calibre_search_figures` finds them
@@ -653,6 +740,10 @@ selected with `CALIBRE_MCP_EMBED_MODEL`; the index is tied to the model, so chan
 | `CALIBRE_MCP_THROTTLE_MS` | `5` ms pause per indexed document |
 | `CALIBRE_EBOOK_CONVERT` | auto-detected: PATH, then `Calibre2\ebook-convert.exe` under both `Program Files` and `Program Files (x86)` (also from 32-bit processes, via `%ProgramW6432%`) |
 | `CALIBRE_MCP_CONVERT_TIMEOUT` | `180` s per conversion |
+| `CALIBRE_MCP_OCR_ENGINE` | `auto` (Tesseract if installed) · `tesseract` · `none` |
+| `CALIBRE_MCP_OCR_LANGS` | `ita+eng` (fallback when the book has no language) |
+| `CALIBRE_MCP_TESSERACT` / `CALIBRE_MCP_TESSDATA` | auto-detected: Tesseract path, language files |
+| `CALIBRE_MCP_OCR_DPI` / `CALIBRE_MCP_OCR_PAGE_TIMEOUT` | `300` / `180` s |
 | `CALIBRE_MCP_LOG_LEVEL` | `INFO` (`DEBUG` also logs queries) |
 | `CALIBRE_MCP_HTTP_TOKEN` | — (required for `--transport http`, min 24 chars) |
 | `CALIBRE_LIBRARIES` | — several libraries, `;`-separated on Windows; the first is the default |
@@ -673,10 +764,11 @@ selected with `CALIBRE_MCP_EMBED_MODEL`; the index is tied to the model, so chan
 | Server doesn't start | run `python calibre_mcp.py --status` with the same paths as in the config |
 | Full-text search finds little | `calibre_library_status`: low `texts_extracted` → leave Calibre open or run `--extract-missing` |
 | LIT/MOBI books fail | `ebook_convert` is `null` in status → set `CALIBRE_EBOOK_CONVERT` |
-| "OCR needed" | scanned PDF without a text layer: run OCR (e.g. OCRmyPDF) and re-add it to Calibre |
+| "OCR needed" / scanned PDF without text | `install.ps1` (or `--download-ocr-langs ita,eng` after installing Tesseract), then `--extract-missing`; a PDF with a garbled text layer: `--extract-missing --books <id> --force-ocr` |
 | "Semantic search dependencies are missing" | They were installed into a different Python: run the command printed in the error (it uses the server's own `python.exe`), then restart the client |
 | Model download failed during setup | Check network/`HTTPS_PROXY`, then `.venv\Scripts\python.exe calibre_mcp.py --download-model`; offline: see [Semantic search model](#semantic-search-model) |
 | Codex/ChatGPT: tool times out | Raise `tool_timeout_sec` in `config.toml` (on-demand LIT/MOBI conversion can take minutes) |
+| `--build-embeddings` reported failed books | `--embeddings-report` shows them with the error; fix, then `--build-embeddings --retry-failed` |
 | "The semantic index was built by an older version" | index from 4.x: run `.venv\Scripts\python.exe calibre_mcp.py --build-embeddings` once |
 | Semantic results all `low_confidence` | the topic may not be in the library, or the relevant books are not indexed yet: check `semantic_index.books` in `calibre_library_status` |
 | "Figure index not built" / figure search finds nothing | run `calibre_mcp.py --index-figures`; only EPUB and PDF figures with a caption or alt text are indexed |
@@ -695,6 +787,7 @@ selected with `CALIBRE_MCP_EMBED_MODEL`; the index is tied to the model, so chan
 - **Query language**: compiled to parametrised SQL; table and column names come only from a fixed map or from integer custom-column ids, never from user text. Regex guard against ReDoS (length cap, no nested quantifiers or backreferences, subject truncated).
 - **Semantic search**: the embedding model is third-party code and weights downloaded once from Hugging Face during setup (supply-chain trust); queries never leave the machine. Use `CALIBRE_MCP_EMBED_BACKEND=hash` where downloads are not acceptable.
 - **Curation and legal gate**: report-only; nothing is changed in Calibre. The legal gate is mechanical evidence of transformation, not legal advice.
+- **OCR**: Tesseract runs as a subprocess with list arguments, no shell, a per-page timeout and below-normal priority; page renders are capped in pixels. OCR output is untrusted content like any book text.
 - **No write path**: the server never modifies the Calibre library. Its only writes are to its own sidecar files in `%LOCALAPPDATA%\calibre-mcp`.
 - **Licences**: PyMuPDF and pymupdf4llm are AGPL-3.0; pypdf is BSD; fastembed is Apache-2.0.
 
@@ -705,6 +798,7 @@ selected with `CALIBRE_MCP_EMBED_MODEL`; the index is tied to the model, so chan
 - Stemming is English-only (Porter).
 - Chapter detection without a TOC is heuristic (keywords, numbering, short all-caps lines); unusual layouts may give a coarse map.
 - Figure search covers EPUB and PDF; figures inside LIT/MOBI/AZW3 are reachable per book with `calibre_list_figures`, not through the library-wide index.
+- OCR quality depends on the scan: handwriting, multi-column layouts and tables come out imperfect with Tesseract.
 - Library on a network share or OneDrive: works read-only, but with higher latency and with sync side effects for Calibre itself.
 - Offsets returned by `search_fulltext` refer to the text of the reported `format`, not to the EPUB sections extracted on demand.
 
