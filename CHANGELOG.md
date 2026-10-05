@@ -1,5 +1,9 @@
 # Changelog
 
+**5.3.1 - Screenshots in the READMEs**
+
+- add: README — screenshots of the setup wizard and the console (`presentation/screenshots/`). The console images are real captures; the wizard images are illustrations drawn from its layout.
+
 **5.3.0 - Setup wizard, console and repository layout**
 
 - add: `setup-wizard.bat` — graphical setup that collects the choices and runs `install.ps1`; it offers only the options the installer declares and quotes paths safely, so a library path ending in a backslash no longer breaks the command line.

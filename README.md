@@ -145,6 +145,26 @@ to launch. Then ask: *"which books in my library explain prompt
 injection?"* The [installation manual](docs/en/installation.md) covers the three routes (wizard, script, manual),
 other clients, and how to check that everything works.
 
+## The setup wizard and the console
+
+Two optional Windows tools take the command line out of the way. `setup-wizard.bat` checks your PC, picks your
+library and installs for you; `console.bat` starts and watches the server and runs the maintenance jobs, with live
+progress and with errors and warnings kept apart from the rest.
+
+<p align="center">
+<img src="presentation/screenshots/wizard-checks.png" alt="Setup wizard: pre-flight checks" width="49%">
+<img src="presentation/screenshots/wizard-components.png" alt="Setup wizard: choosing what to install" width="49%">
+</p>
+<p align="center"><em>Setup wizard: pre-flight checks, then the choice of components (an illustration drawn from the wizard's layout; the real window uses Windows' native controls).</em></p>
+
+<p align="center">
+<img src="presentation/screenshots/console-overview.png" alt="Console: server running, library status, a warning in the Problems panel" width="49%">
+<img src="presentation/screenshots/console-maintenance.png" alt="Console: a semantic-index build in progress with its live log" width="49%">
+</p>
+<p align="center"><em>Console: the server running with its library status and a warning kept in the Problems panel (left); a semantic-index build of 300 synthetic books in progress, with its live log and progress bar (right).</em></p>
+
+How to use them: [setup wizard](docs/en/installation.md#option-a-setup-wizard) · [console](docs/en/tweaking.md#console-graphical-manager).
+
 ## Works with
 
 | Client | Connection | Setup |

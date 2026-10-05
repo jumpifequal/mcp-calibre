@@ -631,7 +631,7 @@ The root keeps only what you run directly or what a client configuration points 
 | `gui/` | Setup wizard (`setup-wizard.ps1`), console (`calibre_mcp_console.py`) and their developer notes |
 | `docs/` | The manuals, in English (`docs/en/`) and Italian (`docs/it/`) |
 | `scripts/` | `update_embeddings.bat` (routine index refresh). Also the local, git-ignored publishing helpers `publish_me.bat` and `publish-to-github.ps1` |
-| `presentation/` | Architecture figure (`Architecture_and_Technical_Overview.png`, used by the READMEs), `icon/` (the owl: SVG, PNG sizes, favicon, GitHub social preview, and the script that regenerates them), the two slide decks and the PDF |
+| `presentation/` | Architecture figure (`Architecture_and_Technical_Overview.png`, used by the READMEs), `icon/` (the owl: SVG, PNG sizes, favicon, GitHub social preview, and the script that regenerates them), `screenshots/` (the images of the wizard and the console used by the READMEs), and two PDF documents: a user guide (`mcp-calibre userguide.pdf`) and an architecture and capabilities manual (`mcp-calibre_architecture.pdf`) |
 | `skills/` | Companion skills (`calibre-distill`, `calibre-distill-topic`, `calibre-book-agent`, `calibre-book-redteam`) |
 | `tests/` | Test suite (including `test_skills.py`, which checks the skills against the server), the generator of the fake library and the synthetic performance benchmark (`bench_synthetic.py`) |
 | `.github/` | CI workflow |

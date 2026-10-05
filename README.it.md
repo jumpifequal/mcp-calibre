@@ -151,6 +151,26 @@ lanciare. Poi chiedi: *"quali libri della mia libreria
 spiegano la prompt injection?"* Il [manuale di installazione](docs/it/installation.md) descrive le tre strade
 (procedura guidata, script, manuale), gli altri client e come verificare che tutto funzioni.
 
+## La procedura guidata e la console
+
+Due strumenti opzionali per Windows tolgono di mezzo la riga di comando. `setup-wizard.bat` controlla il tuo PC,
+sceglie la libreria e installa al posto tuo; `console.bat` avvia e osserva il server ed esegue i lavori di
+manutenzione, con avanzamento in tempo reale e con errori e avvisi tenuti separati dal resto.
+
+<p align="center">
+<img src="presentation/screenshots/wizard-checks.png" alt="Procedura guidata: controlli preliminari" width="49%">
+<img src="presentation/screenshots/wizard-components.png" alt="Procedura guidata: scelta di cosa installare" width="49%">
+</p>
+<p align="center"><em>Procedura guidata: controlli preliminari, poi la scelta dei componenti (un'illustrazione disegnata a partire dal layout della procedura; la finestra vera usa i controlli nativi di Windows).</em></p>
+
+<p align="center">
+<img src="presentation/screenshots/console-overview.png" alt="Console: server in esecuzione, stato della libreria, un avviso nel pannello Problems" width="49%">
+<img src="presentation/screenshots/console-maintenance.png" alt="Console: costruzione di un indice semantico in corso con il suo log in tempo reale" width="49%">
+</p>
+<p align="center"><em>Console: il server in esecuzione con lo stato della libreria e un avviso tenuto nel pannello Problems (a sinistra); la costruzione dell'indice semantico di 300 libri sintetici in corso, con log in tempo reale e barra di avanzamento (a destra).</em></p>
+
+Come usarli: [procedura guidata](docs/it/installation.md#opzione-a-procedura-guidata) · [console](docs/it/tweaking.md#console-gestione-grafica).
+
 ## Funziona con
 
 | Client | Connessione | Configurazione |

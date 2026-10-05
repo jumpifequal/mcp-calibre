@@ -29,7 +29,7 @@ cases = [
  ("C:\\x\\a.py:3: DeprecationWarning: old", "warning"),
  ("\x1b[32mINFO\x1b[0m: ready", "status"),
  # lines produced by the real server (level-less format under the HTTP transport)
- ("calibre-mcp 5.3.0: library 'Calibre Library' at /tmp/realdata3/3214f9612ef9 (sidecar /tmp/realdata3/3214f9612ef9)", "status"),
+ ("calibre-mcp 5.3.1: library 'Calibre Library' at /tmp/realdata3/3214f9612ef9 (sidecar /tmp/realdata3/3214f9612ef9)", "status"),
  ("HTTP endpoint http://127.0.0.1:8798/mcp (auth=bearer, allowed hosts=['127.0.0.1:*'])", "status"),
  ("index sync {'added': 1, 'removed': 0, 'seconds': 0.01}", "status"),
  ("StreamableHTTP session manager started", "status"),

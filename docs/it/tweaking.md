@@ -645,7 +645,7 @@ La radice contiene solo ciò che si esegue direttamente o a cui punta la configu
 | `gui/` | Procedura guidata (`setup-wizard.ps1`), console (`calibre_mcp_console.py`) e relative note per sviluppatori |
 | `docs/` | I manuali, in inglese (`docs/en/`) e in italiano (`docs/it/`) |
 | `scripts/` | `update_embeddings.bat` (aggiornamento periodico degli indici). Qui stanno anche gli strumenti locali di pubblicazione, ignorati da git, `publish_me.bat` e `publish-to-github.ps1` |
-| `presentation/` | Figura dell'architettura (`Architecture_and_Technical_Overview.png`, usata dai README), `icon/` (il gufo: SVG, PNG in più dimensioni, favicon, anteprima social di GitHub e lo script che li rigenera), le due presentazioni e il PDF |
+| `presentation/` | Figura dell'architettura (`Architecture_and_Technical_Overview.png`, usata dai README), `icon/` (il gufo: SVG, PNG in più dimensioni, favicon, anteprima social di GitHub e lo script che li rigenera), `screenshots/` (le immagini della procedura guidata e della console usate dai README), e due documenti PDF: una guida utente (`mcp-calibre userguide.pdf`) e un manuale di architettura e funzionalità (`mcp-calibre_architecture.pdf`) |
 | `skills/` | Skill companion (`calibre-distill`, `calibre-distill-topic`, `calibre-book-agent`, `calibre-book-redteam`) |
 | `tests/` | Suite di test (compreso `test_skills.py`, che verifica le skill rispetto al server), generatore della libreria finta e benchmark sintetico delle prestazioni (`bench_synthetic.py`) |
 | `.github/` | Workflow di CI |
