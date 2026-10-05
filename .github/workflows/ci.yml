@@ -55,6 +55,12 @@ jobs:
         run: python tests/test_v5.py
       - name: test_index_report
         run: python tests/test_index_report.py
+      - name: skills against the server
+        run: python tests/test_skills.py
+      - name: console logic
+        run: python tests/test_console_logic.py
+      - name: benchmark smoke (small synthetic library)
+        run: python tests/bench_synthetic.py --books 40 --avg-kb 40 --runs 3 --semantic-books 5
       - name: OCR (Tesseract, Linux)
         if: runner.os == 'Linux'
         run: |

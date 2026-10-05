@@ -6,10 +6,10 @@ rem  update_embeddings.bat - extract missing texts (OCR for scanned PDFs), refre
 rem  semantic and figure indexes, then check the result. /? for help.
 rem ---------------------------------------------------------------------------
 
-rem Always work from this script's folder (double-click, shortcut or another cwd)
-cd /d "%~dp0"
-set "PY=%~dp0.venv\Scripts\python.exe"
-set "SERVER=%~dp0calibre_mcp.py"
+rem Always work from the repository root, the parent of scripts\ (double-click, shortcut or another cwd)
+cd /d "%~dp0.."
+set "PY=%~dp0..\.venv\Scripts\python.exe"
+set "SERVER=%~dp0..\calibre_mcp.py"
 set "REPORT=%LOCALAPPDATA%\calibre-mcp\embeddings-report.txt"
 
 if /i "%~1"=="/?"     goto :help
@@ -22,7 +22,7 @@ if not exist "%PY%" (
     set "RC=1" & goto :end
 )
 if not exist "%SERVER%" (
-    echo [!] calibre_mcp.py not found next to this script.
+    echo [!] calibre_mcp.py not found in the parent folder of this script.
     set "RC=1" & goto :end
 )
 

@@ -1,0 +1,128 @@
+{
+  "environment": {
+    "os": "Linux-6.18.44-fc-v70-x86_64-with-glibc2.39",
+    "python": "3.12.3",
+    "sqlite": "3.45.1",
+    "cpu_count": 1,
+    "cpu": "Intel(R) Xeon(R) Processor @ 2.10GHz",
+    "ram_mb": 3999
+  },
+  "dataset": {
+    "books": 1500,
+    "text_mb": 524,
+    "seconds": 15.2,
+    "library_db_mb": 526
+  },
+  "initial_index": {
+    "added": 1500,
+    "removed": 0,
+    "seconds": 21.17,
+    "index_mb": 148
+  },
+  "operations": {
+    "metadata search (q=tag word)": {
+      "first_ms": 8.1,
+      "median_ms": 7.79,
+      "p95_ms": 10.72,
+      "runs": 30
+    },
+    "metadata search (tag filter)": {
+      "first_ms": 4.1,
+      "median_ms": 4.08,
+      "p95_ms": 5.42,
+      "runs": 30
+    },
+    "metadata search (author filter)": {
+      "first_ms": 3.2,
+      "median_ms": 3.21,
+      "p95_ms": 4.01,
+      "runs": 30
+    },
+    "metadata search (Calibre syntax)": {
+      "first_ms": 6.1,
+      "median_ms": 5.57,
+      "p95_ms": 8.65,
+      "runs": 30
+    },
+    "full-text, rare word, 10 books x 3 snippets": {
+      "first_ms": 53.1,
+      "median_ms": 50.36,
+      "p95_ms": 58.63,
+      "runs": 30
+    },
+    "full-text, common word, 10 books x 3 snippets": {
+      "first_ms": 25.2,
+      "median_ms": 25.13,
+      "p95_ms": 25.92,
+      "runs": 30
+    },
+    "full-text, phrase, 10 books x 3 snippets": {
+      "first_ms": 63.0,
+      "median_ms": 62.72,
+      "p95_ms": 65.14,
+      "runs": 30
+    },
+    "full-text, rare word, 50 books, no snippets": {
+      "first_ms": 3.5,
+      "median_ms": 2.45,
+      "p95_ms": 3.31,
+      "runs": 30
+    },
+    "full-text, common word, 50 books, no snippets": {
+      "first_ms": 3.1,
+      "median_ms": 2.98,
+      "p95_ms": 3.24,
+      "runs": 30
+    },
+    "read_text (6,000 chars, middle of a book)": {
+      "first_ms": 2.7,
+      "median_ms": 1.91,
+      "p95_ms": 2.04,
+      "runs": 30
+    },
+    "find_in_book (10 hits)": {
+      "first_ms": 8.4,
+      "median_ms": 8.26,
+      "p95_ms": 8.75,
+      "runs": 30
+    },
+    "chapter map of one book": {
+      "first_ms": 4.3,
+      "median_ms": 1.88,
+      "p95_ms": 1.97,
+      "runs": 30
+    },
+    "quality report (whole library)": {
+      "first_ms": 28.7,
+      "median_ms": 27.35,
+      "p95_ms": 61.63,
+      "runs": 5
+    },
+    "find_duplicates (whole library)": {
+      "first_ms": 11.7,
+      "median_ms": 12.42,
+      "p95_ms": 13.01,
+      "runs": 5
+    }
+  },
+  "incremental_sync": {
+    "added": 1,
+    "removed": 2,
+    "seconds": 0.15,
+    "wall_ms": 153.0,
+    "note": "1 changed text, 1 removed; includes the per-document throttle"
+  },
+  "semantic_hash_backend": {
+    "books": 100,
+    "passages": 60376,
+    "build_seconds": 15.4,
+    "embeddings_mb": 52,
+    "hybrid_search": {
+      "first_ms": 291.0,
+      "median_ms": 75.08,
+      "p95_ms": 87.65,
+      "runs": 10
+    },
+    "note": "hash backend: ranking path only, not model inference speed"
+  }
+}

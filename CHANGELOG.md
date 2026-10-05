@@ -1,5 +1,27 @@
 # Changelog
 
+**5.3.0 - Setup wizard, console and repository layout**
+
+- add: `setup-wizard.bat` — graphical setup that collects the choices and runs `install.ps1`; it offers only the options the installer declares and quotes paths safely, so a library path ending in a backslash no longer breaks the command line.
+- add: `console.bat` — desktop console that launches the server over HTTP and runs the maintenance jobs, with settings profiles in place of `set` lines, output classified into errors, warnings, progress and requests, and a protocol self-test (HTTP and stdio).
+- add: console — writes the Claude Desktop entry (with a backup), copies the Claude Code command and the `mcp-remote` JSON, and follows Claude Desktop's own MCP log.
+- add: project icon — a puffy owl librarian (SVG, PNG sizes, favicon, 1280×640 GitHub social preview) in `presentation/icon/`, shown at the top of the READMEs and used as the window and shortcut icon of the console and the setup wizard.
+- add: documentation in four manuals, in English and Italian (`docs/en`, `docs/it`): installation (wizard, script, manual), tweaking and internals, FAQ and troubleshooting, performance. The READMEs are now short presentation pages that link to them.
+- add: `tests/bench_synthetic.py` — reproducible performance benchmark on a synthetic library (default 1,500 books, ~525 MB of text); the figures in the README and in the performance manual come from its reference run (`tests/bench_reference.json`).
+- change: README performance figures replaced by the benchmark's measurements (index build 21 s, 148 MB index, full-text with snippets 25–63 ms on one 2.1 GHz core).
+- change: README — the companion skills are highlighted among the reasons to use the project, with two new examples (a book's method turned into a skill; two books run as two agents that debate or collaborate); the manual explains how to set both up.
+- add: FAQ — with stdio nothing needs to be started (the client launches the server); *Start server* in the console is only for an HTTP server.
+- add: skill `calibre-book-agent` — give it a book number or title and it writes an agent (a Claude Code subagent file or a system prompt) grounded in the book: principles, decision heuristics, vocabulary, blind spots, a protocol that checks the book and cites the chapter before claiming what it says, and rules for debating or collaborating with another book-agent. Verified with the legal gate and a three-question smoke test.
+- add: skill `calibre-book-redteam` — give it a book number or title and it extracts the central claims, checks the book's internal consistency and searches the rest of the library for support and contradiction, then delivers a claim-by-claim report (steelman, counter-sources, rating) that passes the legal gate. Library evidence only.
+- add: `tests/test_skills.py` — checks every skill against the server (every tool, keyword argument and flag a skill names must exist) and runs the prescribed call sequences on the fake library; it is part of the CI.
+- change: architecture figure updated (`presentation/Architecture_and_Technical_Overview.png`): it now shows the 30 tools, 4 resources, 5 prompts and the image gallery, the semantic hybrid search sequence, the sidecar cache, the extraction chain, the legal gate and the safety model. Lettering errors of the generated image corrected (PRAGMA, FTS5, int8, BM25, Auth, `calibre-mcp\<library-hash>`, untrusted, OCR) and the corner watermark removed.
+- add: skills manual (`docs/en/skills.md`, `docs/it/skills.md`) — what each of the four skills does, how to install and ask for it, what it produces, its limits, how to run two books against each other, the legal gate, and a skills FAQ. The skills material moved out of the tweaking manual.
+- change: README — new section "Books that work for you" ("I libri che lavorano per te"): what the four skills do, in terms of results, with a link to the skills manual.
+- add: FAQ — what to do when you add, change or delete a book in Calibre: what updates by itself, what needs `--extract-missing`, `--sync`, `--build-embeddings` or `--index-figures`, and what a deleted book looks like until the indexes catch up.
+- change: README — M8ven MCP Trust Index badge (independent static scan; the score updates by itself; new projects are capped at grade C).
+- change: repository layout — the architecture figure and the two slide decks are under `presentation/` (the duplicate `Documentation/` folder is gone), `update_embeddings.bat` moved to `scripts\`, the graphical tools are in `gui/`.
+- change: README — documents the wizard, the console and the repository layout, and `scripts\update_embeddings.bat` is described as the four steps it actually runs.
+
 **5.2.0 - OCR for scanned PDFs**
 
 - add: `--extract-missing` — OCRs scanned PDFs automatically (Tesseract), only on the pages without a text layer; the PDF is never modified.

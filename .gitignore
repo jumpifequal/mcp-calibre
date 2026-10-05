@@ -18,7 +18,7 @@ tests/Calibre Library/
 .env
 .env.*
 
-# --- OS and editor files (publish_me.bat runs "git add -A": keep them out)
+# --- OS and editor files (scripts/publish_me.bat runs "git add -A": keep them out)
 desktop.ini
 Thumbs.db
 ehthumbs.db
@@ -30,5 +30,5 @@ $RECYCLE.BIN/
 *.swp
 
 # --- local publishing helpers (not part of the project)
-publish_me.bat
-publish-to-github.ps1
+scripts/publish_me.bat
+scripts/publish-to-github.ps1
