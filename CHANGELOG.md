@@ -1,5 +1,13 @@
 # Changelog
 
+**5.3.2 - Fixing su embeddings**
+
+* fix: increased embeddings cap to 8000 (variable CALIBRE_MCP_EMBED_MAX_CHUNKS), so longer books are correctly managed via internal language model
+
+* add: .sh and .ps1 scripts to explicitly create embeddings for long books (find it under scripts)
+
+* fix: changed CALIBRE_MCP_STEMMING to 1 by default (this way you can search for *exploit* and find also *exploitation*). Stemming works only in English
+
 **5.3.1 - Screenshots in the READMEs**
 
 - add: README — screenshots of the setup wizard and the console (`presentation/screenshots/`). The console images are real captures; the wizard images are illustrations drawn from its layout.
