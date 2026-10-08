@@ -97,7 +97,7 @@ except ImportError:  # SDK v1
     from mcp.server.fastmcp.exceptions import ToolError  # type: ignore
 from mcp.types import CallToolResult, ImageContent, TextContent, ToolAnnotations
 
-__version__ = "5.3.1"
+__version__ = "5.3.2"
 
 # --------------------------------------------------------------------------- config
 FORMAT_PREF = ["EPUB", "KEPUB", "AZW3", "AZW", "MOBI", "FB2", "DOCX", "HTMLZ",
@@ -109,7 +109,7 @@ EPUB_MAX_MEMBER = 64 * 1024 * 1024       # zip-bomb guards
 EPUB_MAX_TOTAL = 256 * 1024 * 1024
 PDF_MAX_PAGES_PER_CALL = 30
 CONVERT_TIMEOUT = int(os.environ.get("CALIBRE_MCP_CONVERT_TIMEOUT", "180"))
-STEMMING = os.environ.get("CALIBRE_MCP_STEMMING", "0").lower() in ("1", "true", "yes")
+STEMMING = os.environ.get("CALIBRE_MCP_STEMMING", "1").lower() in ("1", "true", "yes")
 _IMAGE_REF = r"^(cover|s\d+-\d+|p\d+-x\d+)$"   # "cover" or a figure id (EPUB s<sec>-<n>, PDF p<page>-x<xref>)
 NATIVE_FORMATS = {"EPUB", "KEPUB", "PDF", "TXT"}
 

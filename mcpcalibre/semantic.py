@@ -33,7 +33,7 @@ from typing import Any, Callable, Iterable, Optional
 # inside its effective window instead of diluting them.
 CHUNK = int(os.environ.get("CALIBRE_MCP_EMBED_CHUNK", "700"))
 OVERLAP = 120
-MAX_CHUNKS = int(os.environ.get("CALIBRE_MCP_EMBED_MAX_CHUNKS", "1500"))
+MAX_CHUNKS = int(os.environ.get("CALIBRE_MCP_EMBED_MAX_CHUNKS", "8000"))
 SCHEMA = "2"
 RRF_K = 60
 FRONT_DEMOTION = 0.5
