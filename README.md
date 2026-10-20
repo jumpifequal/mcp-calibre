@@ -14,7 +14,7 @@ Calibre's own databases directly (no Calibre process needed, no write access, ev
 needs to really work with a library: full-text search, search by meaning, reading by chapter, images, OCR for
 scanned PDFs, library cleanup, and a check that notes written from books do not copy them.
 
-[Install it](docs/en/installation.md) · [Tweak it and see how it works](docs/en/tweaking.md) · [Skills](docs/en/skills.md) · [FAQ](docs/en/faq.md) · [Performance](docs/en/performance.md)
+[Install it](docs/en/installation.md) · [Tweak it and see how it works](docs/en/tweaking.md) · [Reading and images](docs/en/reading-and-images.md) · [Skills](docs/en/skills.md) · [FAQ](docs/en/faq.md) · [Performance](docs/en/performance.md)
 
 ## Why you will like it
 
@@ -38,6 +38,21 @@ scanned PDFs, library cleanup, and a check that notes written from books do not 
   explains each one.
 - **Fast.** Searches answer in milliseconds on a library of 1,500 books (numbers [below](#performance-at-a-glance)).
 
+## Open a book without leaving the chat
+
+Open a diagram, zoom into the detail, copy it as PNG, or press **Read** to consult the book.
+Choose a chapter, adjust the text size and continue at your own pace. The assistant and skills keep
+using the normal search/read tools to turn your library into actionable answers.
+
+<p align="center">
+<img src="presentation/screenshots/ux-gallery-en.png" alt="Gallery with fictional cover and figures" width="56%">
+<img src="presentation/screenshots/ux-reader-en.png" alt="In-place reader" width="42%">
+</p>
+
+*Real gallery and reader renderings with a fictional book, cover and sample content. MCP Apps support required.*
+
+**[Explore reading, images and quotations](docs/en/reading-and-images.md)**
+
 ## What you can ask
 
 | Goal | Example request | Tools involved |
@@ -53,17 +68,9 @@ scanned PDFs, library cleanup, and a check that notes written from books do not 
 | Put two books to work | "make an agent out of each of 1168 and 1164 and let them debate (or collaborate on) how to rescue a late project" | two `calibre-book-agent` agents ([how](docs/en/skills.md#book-against-book-a-step-by-step-recipe)) |
 | Stress-test a book | "does 1168 hold up? check its claims against the rest of my library" | skill `calibre-book-redteam`, `calibre_search_semantic` |
 
-Display verbatim quotations in the HTML view with `calibre_show_quotes`, passing
-`passages: [{book_id: 1168, format: "EPUB", offset: 1200, max_chars: 500}]`.
-The server extracts the passage from the book and sends it only in MCP Apps view metadata (`_meta`);
-the chat response contains references only. The view shows the title, authors, format and character
-range in extracted text (not page numbers). The client must forward `_meta` to the view;
-without this support, passages are neither displayed nor automatically copied into chat.
-After upgrading to **5.4.0**, restart the server and refresh the client's MCP connection to discover the
-new tool. See [Verbatim quotations](docs/en/tweaking.md#showing-verbatim-quotations-in-the-chat) for limits,
-exact character ranges and troubleshooting.
+For direct consultation, use the gallery’s **Read** button or explicitly request a passage display. See [Reading and images](docs/en/reading-and-images.md) for the walkthrough, gestures and client requirements.
 
-In total: **31 tools**, 4 resources and 5 prompts, all read-only. The full list is in the
+In total: **31 assistant tools plus one internal reader tool**, 4 resources and 5 prompts, all read-only. The full list is in the
 [tools reference](docs/en/tweaking.md#tools).
 
 ## Books that work for you
@@ -194,6 +201,7 @@ which is not a supported way to expose a personal library.
 |---|---|
 | [Installation](docs/en/installation.md) | install with the setup wizard, the install script or by hand; connect Claude, Codex and ChatGPT; check, update, uninstall |
 | [Tweaking and under the hood](docs/en/tweaking.md) | understand the architecture and data stores, the tools and features in depth, every setting and command-line flag, the console, security |
+| [Reading and images](docs/en/reading-and-images.md) | explore the gallery, zoom and export figures, read in-place and display quotations; client support |
 | [Skills](docs/en/skills.md) | use the four companion skills: distill a book, synthesize a topic, turn a book into an agent, stress-test a book; the legal gate; how to run two books against each other |
 | [FAQ and troubleshooting](docs/en/faq.md) | solve setup and usage problems, and know the limits |
 | [Performance](docs/en/performance.md) | see how speed was measured, the results, sizing and tuning |

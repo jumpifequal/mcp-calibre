@@ -11,6 +11,7 @@ import calibre_mcp as m
 
 
 class LibraryStub:
+    name = "fixture"
     text = 'A source passage.\n<script>alert("book text")</script>\nFinal words.'
 
     def describe(self, ids):
@@ -26,6 +27,14 @@ class QuoteTests(unittest.TestCase):
         self.patch = patch.object(m, "LIB", self.lib)
         self.patch.start()
         self.addCleanup(self.patch.stop)
+        for name, value in (("LIBS", {"fixture": self.lib}), ("_DEFAULT_LIB", ["fixture"])):
+            p = patch.object(m, name, value)
+            p.start()
+            self.addCleanup(p.stop)
+        self.chapters_patch = patch.object(m, "book_chapters", side_effect=lambda book_id, fmt: (
+            m.structure.chapter_map(self.lib.text, m.fold), self.lib.text, fmt, "fixture"))
+        self.chapters_patch.start()
+        self.addCleanup(self.chapters_patch.stop)
 
     def result(self, **kwargs):
         return m.calibre_show_quotes([m.QuoteRef(book_id=1, **kwargs)])
@@ -38,6 +47,8 @@ class QuoteTests(unittest.TestCase):
         self.assertEqual(item["authors"], ["Author"])
         self.assertEqual(item["end_offset"], len(self.lib.text))
         self.assertEqual(item["format"], "EPUB")
+        self.assertIn("percent", item["location"])
+        self.assertEqual(item["library"], "fixture")
 
     def test_text_only_in_view_metadata(self):
         payload = self.result().model_dump(by_alias=True)
@@ -110,6 +121,50 @@ class QuoteTests(unittest.TestCase):
              patch.object(m, "_DEFAULT_LIB", ["primary"]):
             result = m.calibre_show_quotes([m.QuoteRef(book_id=1)], library="secondary")
         self.assertEqual(result.meta["calibreQuotes"]["passages"][0]["text"], secondary.text)
+
+    def test_reader_text_only_in_view_metadata(self):
+        r = m.calibre_read_view(book_id=1).model_dump(by_alias=True)
+        view = r.pop("_meta")["calibreReader"]
+        self.assertEqual(view["text"], self.lib.text)
+        self.assertEqual(view["library"], "fixture")
+        self.assertIn("chapters", view)
+        self.assertNotIn(self.lib.text, json.dumps(r))
+        self.assertNotIn("script", json.dumps(r))
+
+    def test_reader_pagination_and_format(self):
+        self.lib.text = "First chapter\n" + "word " * 1500
+        first = m.calibre_read_view(book_id=1, max_chars=500, format="EPUB").meta["calibreReader"]
+        second = m.calibre_read_view(book_id=1, offset=first["next_offset"], max_chars=500,
+                                    format=first["format"]).meta["calibreReader"]
+        self.assertEqual(first["offset"], 0)
+        self.assertEqual(second["offset"], first["next_offset"])
+        self.assertEqual(first["text"] + second["text"], self.lib.text[:second["next_offset"]])
+
+    def test_reader_app_only_schema(self):
+        async def schema():
+            tools = await m.mcp.list_tools()
+            t = next(t for t in tools if t.name == "calibre_read_view")
+            self.assertEqual(t.model_dump(by_alias=True)["_meta"]["ui"]["visibility"], ["app"])
+        asyncio.run(schema())
+
+    def test_reader_preserves_selected_library(self):
+        primary, secondary = LibraryStub(), LibraryStub()
+        primary.name, secondary.name = "primary", "secondary"
+        secondary.text = "Only the secondary library contains this passage."
+        with patch.object(m, "LIB", m._LibProxy()), \
+             patch.object(m, "LIBS", {"primary": primary, "secondary": secondary}), \
+             patch.object(m, "_DEFAULT_LIB", ["primary"]):
+            view = m.calibre_read_view(book_id=1, library="secondary").meta["calibreReader"]
+        self.assertEqual(view["text"], secondary.text)
+        self.assertEqual(view["library"], "secondary")
+
+    def test_quote_chapter_reference(self):
+        self.lib.text = "Chapter 1: Starting\n" + "first paragraph " * 50
+        cmap = {"chapters": [{"title": "Chapter 1: Starting", "index": 0, "offset": 0,
+                              "end": len(self.lib.text), "chars": len(self.lib.text)}]}
+        with patch.object(m, "book_chapters", return_value=(cmap, self.lib.text, "EPUB", "fixture")):
+            item = self.result(offset=30).meta["calibreQuotes"]["passages"][0]
+        self.assertEqual(item["location"]["chapter"], "Chapter 1: Starting")
 
 
 if __name__ == "__main__":

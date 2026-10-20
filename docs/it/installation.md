@@ -1,6 +1,6 @@
 # Installazione
 
-[← README](../../README.it.md) · **Installazione** · [Personalizzazione e funzionamento interno](tweaking.md) · [Skill](skills.md) · [FAQ e risoluzione dei problemi](faq.md) · [Prestazioni](performance.md)
+[← README](../../README.it.md) · **Installazione** · [Personalizzazione e funzionamento interno](tweaking.md) · [Lettura e immagini](reading-and-images.md) · [Skill](skills.md) · [FAQ e risoluzione dei problemi](faq.md) · [Prestazioni](performance.md)
 
 [🇬🇧 English](../en/installation.md) · 🇮🇹 Italiano
 

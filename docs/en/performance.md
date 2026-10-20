@@ -1,6 +1,6 @@
 # Performance
 
-[← README](../../README.md) · [Installation](installation.md) · [Tweaking and under the hood](tweaking.md) · [Skills](skills.md) · [FAQ and troubleshooting](faq.md) · **Performance**
+[← README](../../README.md) · [Installation](installation.md) · [Tweaking and under the hood](tweaking.md) · [Reading and images](reading-and-images.md) · [Skills](skills.md) · [FAQ and troubleshooting](faq.md) · **Performance**
 
 🇬🇧 English · [🇮🇹 Italiano](../it/performance.md)
 

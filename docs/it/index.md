@@ -1,10 +1,10 @@
 # Documentazione di mcp-calibre
 
-[← README](../../README.it.md) · [Installazione](installation.md) · [Personalizzazione e funzionamento interno](tweaking.md) · [Skill](skills.md) · [FAQ e risoluzione dei problemi](faq.md) · [Prestazioni](performance.md)
+[← README](../../README.it.md) · [Installazione](installation.md) · [Personalizzazione e funzionamento interno](tweaking.md) · [Lettura e immagini](reading-and-images.md) · [Skill](skills.md) · [FAQ e risoluzione dei problemi](faq.md) · [Prestazioni](performance.md)
 
 [🇬🇧 English](../en/index.md) · 🇮🇹 Italiano
 
-Il [README](../../README.it.md) presenta mcp-calibre. Tutto ciò che va più a fondo sta in cinque manuali, disponibili in italiano e in inglese.
+Il [README](../../README.it.md) presenta mcp-calibre. Tutto ciò che va più a fondo sta in sei manuali, disponibili in italiano e in inglese.
 
 | Voglio… | Vai a |
 |---|---|
@@ -14,7 +14,8 @@ Il [README](../../README.it.md) presenta mcp-calibre. Tutto ciò che va più a f
 | eseguire un lavoro da riga di comando | [Riga di comando](tweaking.md#riga-di-comando) |
 | capire come funziona | [Architettura](tweaking.md#architettura) |
 | vedere tutti i tool | [Tool](tweaking.md#tool) |
-| mostrare passaggi verbatim inline | [Citazioni nella chat](tweaking.md#mostrare-citazioni-verbatim-nella-chat) |
+| mostrare passaggi verbatim inline | [Citazioni nella chat](reading-and-images.md#mostrare-citazioni-verbatim-nella-chat) |
+| leggere direttamente nella chat, zoomare o salvare figure | [Lettura e immagini](reading-and-images.md) |
 | usare le skill | [Skill](skills.md) |
 | far confrontare due libri | [Libro contro libro](skills.md#libro-contro-libro-ricetta-passo-per-passo) |
 | risolvere un problema | [FAQ e risoluzione dei problemi](faq.md) |

@@ -10,6 +10,7 @@ class Element {
   get childElementCount() { return this.children.length; }
   appendChild(child) { this.children.push(child); }
   addEventListener() {}
+  setAttribute() {}
 }
 const nodes = new Map();
 const parent = {postMessage() {}};
@@ -17,12 +18,14 @@ const document = {
   body: new Element(), documentElement: new Element(),
   getElementById(id) { if (!nodes.has(id)) nodes.set(id, new Element()); return nodes.get(id); },
   createElement() { return new Element(); },
+  querySelectorAll() { return []; },
 };
 let onMessage;
 const window = {parent, addEventListener(name, fn) { if (name === 'message') onMessage = fn; }};
 const html = fs.readFileSync(path.join(__dirname, '../mcpcalibre/ui/gallery.html'), 'utf8');
 const script = html.match(/<script>([\s\S]*?)<\/script>/)[1];
-vm.runInNewContext(script, {window, document, ResizeObserver: class {observe() {}}, Set, Map, Promise});
+vm.runInNewContext(script, {window, document, ResizeObserver: class {observe() {}}, Set, Map, Promise,
+  setTimeout() { return 0; }, clearTimeout() {}});
 const text = '<script>alert("untrusted")</script>\nExact spacing  preserved.';
 const send = (params, source = parent) => onMessage({source, data: {
   jsonrpc: '2.0', method: 'ui/notifications/tool-result', params,
@@ -35,7 +38,7 @@ const grid = document.getElementById('grid');
 assert.equal(grid.childElementCount, 1);
 assert.equal(grid.children[0].children[0].textContent, text);
 assert.equal(grid.children[0].children[1].children[0].textContent, '<b>Title</b>');
-assert.match(grid.children[0].children[1].children[2].textContent, /\[12, 72\)/);
+assert.match(grid.children[0].children[1].children[2].children[1].textContent, /\[12, 72\)/);
 send({_meta: {calibreQuotes: {passages: []}}}, {});
 assert.equal(grid.childElementCount, 1, 'ignore messages from other frames');
 send({_meta: {calibreQuotes: {passages: []}}});

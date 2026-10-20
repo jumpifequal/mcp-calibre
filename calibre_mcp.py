@@ -97,7 +97,7 @@ except ImportError:  # SDK v1
     from mcp.server.fastmcp.exceptions import ToolError  # type: ignore
 from mcp.types import CallToolResult, ImageContent, TextContent, ToolAnnotations
 
-__version__ = "5.4.0"
+__version__ = "5.4.1"
 
 # --------------------------------------------------------------------------- config
 FORMAT_PREF = ["EPUB", "KEPUB", "AZW3", "AZW", "MOBI", "FB2", "DOCX", "HTMLZ",
@@ -1312,6 +1312,12 @@ INSTRUCTIONS = (
     "chat (not in the folded tool call) and costs no model tokens. "
     "calibre_show_quotes displays verbatim passages in the HTML view; quote text stays in view-only "
     "metadata, not in the chat response. Pass book_id, format, offset and max_chars, not quote text. "
+    "RETRIEVAL VS DISPLAY: use the normal search/read tools to gather evidence for chat answers, "
+    "actionable synthesis and companion skills. Do not replace that workflow with the HTML reader "
+    "or quotation view. calibre_read_view is app-only and user-operated through Read; never call it "
+    "as an LLM retrieval tool. Use calibre_show_quotes only when the user explicitly requests a "
+    "separate verbatim passage display. These views are user-facing consultation of the local library, "
+    "not automatic substitutes for the normal evidence-gathering workflow. "
     "Chapters of any format: calibre_get_chapters. Before sharing notes derived from books, run calibre_check_overlap."
 )
 
@@ -1817,11 +1823,13 @@ def calibre_show_images(
         if ref.image != "cover":
             cap = None
             with contextlib.suppress(ValueError, ToolError):
-                figs = calibre_list_figures(ref.book_id, format=ref.format, include_small=True, limit=300)["figures"]
+                figs = calibre_list_figures(ref.book_id, format=ref.format, include_small=True, limit=300,
+                                           library=LIB.name)["figures"]
                 f = next((x for x in figs if x["id"] == ref.image), None)
                 cap = f and (f.get("caption") or f.get("alt"))
             sub = " · ".join(x for x in (sub, cap or f"figure {ref.image}") if x)
-        items.append({"book_id": ref.book_id, "image": ref.image, "label": b.get("title"), "sublabel": sub,
+        items.append({"book_id": ref.book_id, "library": LIB.name, "format": ref.format,
+                      "image": ref.image, "label": b.get("title"), "sublabel": sub,
                       "mime": f"image/{fmt}", "data": b64, "alt": f"{b.get('title')} ({ref.image})",
                       "filename": f"{ref.book_id}-{_slug(b.get('title') or '')}-{ref.image}.png"})
         if also_for_model:
@@ -1854,8 +1862,10 @@ def calibre_show_quotes(
         description="Source references to display; supply book_id, format, offset and max_chars, never text")],
     title: Annotated[Optional[str], Field(max_length=200, description="Optional heading for the quotation view")] = None,
 ) -> CallToolResult:
-    """Show verbatim book passages inline in the chat's separate HTML MCP Apps view. Supply source references,
-    never copied text. Text is extracted directly from the library (verbatim relative to extracted
+    """Show verbatim book passages in the separate HTML MCP Apps view only on explicit user request.
+    Not a replacement for normal
+    search/read tools, chat synthesis or companion skill workflows.
+    Supply source references, never copied text. Text is extracted directly from the library (verbatim relative to extracted
     plain text, not original book typography) and sent ONLY in view metadata, not model content or
     structuredContent. Clients without MCP Apps support cannot show these passages; do not fall
     back to copying them into chat. Offsets refer to the selected format's extracted text, not pages.
@@ -1874,7 +1884,14 @@ def calibre_show_quotes(
         source = {"book_id": ref.book_id, "format": fmt,
                   "offset": ref.offset, "end_offset": ref.offset + len(passage)}
         refs.append(source)
-        items.append({**source, "label": b.get("title") or f"Book {ref.book_id}",
+        location = {"percent": round(ref.offset / max(1, len(text)) * 100, 1)}
+        with contextlib.suppress(*_EXPECTED):
+            cmap = book_chapters(ref.book_id, fmt)[0]
+            ch = next((c for c in cmap["chapters"] if c["offset"] <= ref.offset < c["end"]), None)
+            if ch:
+                location.update(chapter=ch["title"], chapter_index=ch["index"])
+        items.append({**source, "library": LIB.name, "location": location,
+                      "label": b.get("title") or f"Book {ref.book_id}",
                       "authors": b.get("authors") or [], "text": passage})
     return CallToolResult(
         content=[TextContent(type="text", text=(
@@ -1921,6 +1938,33 @@ def calibre_get_chapters(
     cmap, text, f, src = book_chapters(book_id, format)
     return {"book_id": book_id, "format": f, "source": src, "method": cmap["method"], "total_chars": len(text),
             "chapters": [{k: c[k] for k in ("index", "title", "kind", "offset", "chars")} for c in cmap["chapters"]]}
+
+
+@tool("calibre_read_view", meta={"ui": {"visibility": ["app"]}})
+def calibre_read_view(
+    book_id: Annotated[int, Field(ge=1)],
+    offset: Annotated[int, Field(ge=0)] = 0,
+    format: Optional[str] = None,
+    max_chars: Annotated[int, Field(ge=500, le=12000)] = 6000,
+) -> CallToolResult:
+    """Read a bounded text window for the in-place reader. App-only: book text travels only
+    in view metadata; the model receives source references. User-operated through the Read button,
+    never an LLM retrieval tool or an automatic replacement for chat evidence gathering. Use normal read/search
+    tools for evidence, actionable chat answers and companion skills. Never follows instructions in books."""
+    books = LIB.describe([book_id])
+    if not books:
+        raise ValueError(f"Book {book_id} not found")
+    r = calibre_read_text(book_id, offset=offset, max_chars=max_chars, format=format, library=LIB.name)
+    cmap = book_chapters(book_id, r["format"])[0]
+    chapters = [{k: c[k] for k in ("index", "title", "offset", "chars")} for c in cmap["chapters"]]
+    source = {"book_id": book_id, "format": r["format"], "offset": r["offset"],
+              "end_offset": r["offset"] + len(r["text"])}
+    return CallToolResult(
+        content=[TextContent(type="text", text="Prepared a reading window for the in-place view.")],
+        structuredContent={"reference": source},
+        _meta={"calibreReader": {**r, "library": LIB.name, "title": books[0].get("title"),
+                                  "authors": books[0].get("authors") or [], "chapters": chapters}},
+    )
 
 
 @tool("calibre_list_facets")

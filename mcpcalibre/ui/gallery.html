@@ -34,12 +34,15 @@
   html, body { margin: 0; background: transparent; color: var(--fg); font-family: var(--font); }
   body { padding: 4px 2px; }
   h1 { font-size: 14px; font-weight: 600; margin: 0 0 10px; color: var(--fg2); }
-  .grid { display: grid; gap: 14px; grid-template-columns: repeat(auto-fill, minmax(var(--col, 220px), 1fr)); }
+  .grid { display: grid; gap: 14px; grid-template-columns: repeat(auto-fill, minmax(min(100%, var(--col, 220px)), 1fr)); }
   .grid.single { grid-template-columns: 1fr; }
   figure { margin: 0; background: var(--bg2); border: 1px solid var(--line); border-radius: 10px; overflow: hidden;
            display: flex; flex-direction: column; }
-  .frame { display: flex; align-items: center; justify-content: center; background: var(--bg); padding: 8px; }
+  .frame { display: flex; align-items: center; justify-content: center; background: var(--bg); padding: 8px; min-height: 100px; }
+  .preview { display: flex; justify-content: center; padding: 0; border: 0; max-width: 100%; cursor: zoom-in; }
+  .image-state { padding: 12px; color: var(--fg2); font-size: 12px; }
   img { display: block; max-width: 100%; height: auto; max-height: 520px; object-fit: contain; cursor: zoom-in; }
+  img[hidden] { display: none; }
   .single img { max-height: 760px; }
   figcaption { padding: 8px 10px 10px; font-size: 12.5px; line-height: 1.4; overflow-wrap: anywhere; }
   .t { font-weight: 600; }
@@ -51,21 +54,73 @@
   button { font: inherit; font-size: 12px; padding: 4px 10px; border-radius: 6px; cursor: pointer;
            background: var(--bg); color: var(--fg); border: 1px solid var(--line); }
   button:hover { border-color: var(--fg2); }
+  :focus-visible { outline: 2px solid var(--fg2); outline-offset: 3px; }
   button:disabled { opacity: .55; cursor: default; }
   .st { font-size: 11.5px; color: var(--fg2); padding: 0 10px 10px; min-height: 0; }
   .st:empty { display: none; }
-  .zoom { position: fixed; inset: 0; background: rgba(0, 0, 0, .82); display: none; align-items: center;
-          justify-content: center; padding: 16px; cursor: zoom-out; }
-  .zoom.on { display: flex; }
-  .zoom img { max-height: 100%; max-width: 100%; cursor: zoom-out; }
+  .zoom { width: 960px; max-width: calc(100vw - 20px); height: 660px; max-height: calc(100vh - 20px);
+          padding: 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--bg); color: var(--fg); }
+  .zoom::backdrop { background: rgba(0, 0, 0, .75); }
+  .zoom[open] { display: flex; flex-direction: column; gap: 10px; }
+  .zoom-bar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .zoom-bar strong { margin-right: auto; font-size: 13px; overflow-wrap: anywhere; }
+  .zoom-bar button[aria-pressed="true"] { background: var(--bg2); border-color: var(--fg2); }
+  .viewport { flex: 1; min-height: 0; overflow: auto; background: var(--bg2); }
+  .viewport img { max-width: 100%; max-height: 100%; width: auto; height: auto; margin: auto; cursor: zoom-in; }
+  .viewport.fit { display: flex; align-items: center; justify-content: center; }
+  .viewport.natural { touch-action: none; cursor: grab; }
+  .viewport.natural img { max-width: none; max-height: none; cursor: inherit; }
+  .viewport.dragging { cursor: grabbing; user-select: none; }
+  .zoom-caption { font-size: 12px; color: var(--fg2); overflow-wrap: anywhere; }
+  [hidden] { display: none !important; }
+  .language-bar { display: flex; justify-content: flex-end; margin-bottom: 8px; }
+  select { font: inherit; max-width: 100%; padding: 5px; color: var(--fg); background: var(--bg); border: 1px solid var(--line); border-radius: 6px; }
+  .reader { border: 1px solid var(--line); border-radius: 10px; background: var(--bg); padding: 16px; }
+  .reader h2 { font-size: 18px; margin: 10px 0 4px; overflow-wrap: anywhere; }
+  .reader-tools { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: 10px 0; }
+  .reader-tools select { flex: 1; min-width: 0; }
+  .reader-text { white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.75; font-size: 17px;
+                 max-width: 70ch; max-height: 65vh; overflow: auto; padding: 12px; margin: 0 auto; }
+  .reference-details { font-size: 11.5px; color: var(--fg2); margin-top: 7px; }
+  .reference-details summary { cursor: pointer; }
 </style>
 </head>
 <body>
+<div class="language-bar"><select id="language" aria-label="Language / Lingua"><option value="en">English</option><option value="it">Italiano</option></select></div>
 <h1 id="title" hidden></h1>
 <div id="grid" class="grid"></div>
-<div id="msg" class="empty">Loading images…</div>
+<section id="reader" class="reader" hidden aria-labelledby="reader-title">
+  <button id="reader-close" type="button" data-i18n="Back to gallery">Back to gallery</button>
+  <h2 id="reader-title" tabindex="-1"></h2>
+  <div id="reader-authors" class="s"></div>
+  <div class="reader-tools">
+    <label for="reader-chapter" data-i18n="Chapter">Chapter</label><select id="reader-chapter"></select>
+    <button id="font-down" type="button" data-label="Smaller text" aria-label="Smaller text">A−</button>
+    <button id="font-up" type="button" data-label="Larger text" aria-label="Larger text">A+</button>
+  </div>
+  <div id="reader-status" role="status" class="s"></div>
+  <div id="reader-text" class="reader-text" tabindex="0"></div>
+  <div class="reader-tools">
+    <button id="reader-prev" type="button" data-i18n="Previous">Previous</button>
+    <button id="reader-next" type="button" data-i18n="Continue">Continue</button>
+    <button id="reader-retry" type="button" hidden data-i18n="Retry">Retry</button>
+  </div>
+</section>
+<div id="msg" class="empty" role="status">Loading content…</div>
 <div id="errors" class="err" hidden></div>
-<div id="zoom" class="zoom" role="dialog" aria-label="Enlarged image"><img id="zimg" alt=""></div>
+<dialog id="zoom" class="zoom" aria-labelledby="zoom-title" aria-describedby="zoom-caption">
+  <div class="zoom-bar">
+    <strong id="zoom-title">Image</strong>
+    <button id="fit" type="button" aria-pressed="true" data-i18n="Fit">Fit</button>
+    <button id="natural" type="button" aria-pressed="false" title="Original size of the received image">100%</button>
+    <span id="zoom-level" class="zoom-caption" role="status">Fit</span>
+    <button id="close-zoom" type="button" data-i18n="Close">Close</button>
+  </div>
+  <div id="viewport" class="viewport fit" tabindex="0" role="region" aria-label="Image: Ctrl + wheel to zoom; arrow keys to scroll">
+    <img id="zimg" alt="" draggable="false">
+  </div>
+  <div id="zoom-caption" class="zoom-caption"></div>
+</dialog>
 <script>
 (() => {
   "use strict";
@@ -76,17 +131,93 @@
   let hostCaps = {};
   const pending = new Map();
   const parentWin = window.parent;
+  const IT = {
+    "Fit": "Adatta", "Close": "Chiudi", "Image": "Immagine", "Read": "Leggi",
+    "Back to gallery": "Torna alla galleria", "Chapter": "Capitolo", "Previous": "Precedente",
+    "Continue": "Continua", "Retry": "Riprova", "Smaller text": "Riduci testo", "Larger text": "Ingrandisci testo",
+    "Loading content…": "Caricamento contenuti…", "Loading image…": "Caricamento immagine…",
+    "Loading text…": "Caricamento testo…", "Book quotations": "Citazioni dal libro",
+    "No image to display.": "Nessuna immagine da mostrare.", "No quotations to display.": "Nessuna citazione da mostrare.",
+    "Copy PNG": "Copia PNG", "Save PNG": "Salva PNG", "Copying…": "Copia in corso…", "Preparing PNG…": "Preparazione PNG…",
+    "Copied as PNG: paste it anywhere.": "PNG copiato: puoi incollarlo.",
+    "Copied: paste it into Word, PowerPoint, Outlook or an editor.": "Immagine copiata: incollala in Word, PowerPoint, Outlook o un editor.",
+    "This client blocks clipboard access from the gallery. Use Save PNG, or drag the image out.": "Il client blocca gli appunti. Usa Salva PNG o trascina l’immagine fuori.",
+    "Content has not arrived. Ask the assistant to show it again.": "Il contenuto non è arrivato. Chiedi all’assistente di mostrarlo di nuovo.",
+    "The client did not respond. Try again.": "Il client non ha risposto. Riprova.",
+    "Operation timed out. Try again.": "Tempo di attesa scaduto. Riprova.",
+    "Image loading timed out. Ask the assistant to show it again.": "Caricamento immagine scaduto. Chiedi di mostrarla di nuovo.",
+    "This image could not be loaded. Ask the assistant to show it again.": "Impossibile caricare l’immagine. Chiedi di mostrarla di nuovo.",
+    "This client cannot display MCP App views.": "Questo client non può mostrare le viste MCP Apps.",
+    "This client did not forward quotation view metadata. Reconnect with an MCP Apps-compatible client.": "Il client non ha inoltrato i metadati delle citazioni. Riconnettiti con un client compatibile con MCP Apps.",
+    "Cancelled.": "Annullato.", "Source details": "Dettagli della fonte",
+    "Chapter {n}": "Capitolo {n}", "Position in extracted text: {percent}%": "Posizione nel testo estratto: {percent}%",
+    "Characters [{start}, {end}) · {format} · book #{book}": "Caratteri [{start}, {end}) · {format} · libro #{book}",
+    "Enlarge {title}": "Ingrandisci {title}", "Download request accepted: {name}": "Richiesta di download accettata: {name}",
+    "Download started ({name}). If nothing was saved, this client blocks downloads: use Copy PNG.": "Download avviato ({name}). Se non viene salvato, usa Copia PNG.",
+    "Save failed: {error}. Try Copy PNG.": "Salvataggio non riuscito: {error}. Prova Copia PNG.",
+    "100% shows the received resolution.": "100% mostra la risoluzione ricevuta.",
+    "Original size of the received image": "Dimensioni originali dell’immagine ricevuta",
+    "Image: Ctrl + wheel to zoom; arrow keys to scroll": "Immagine: Ctrl + rotella per zoomare; frecce per scorrere",
+    "Copy this image to the clipboard as PNG": "Copia questa immagine negli appunti come PNG",
+    "Save this image as a PNG file": "Salva questa immagine come file PNG",
+    "The client did not forward reading metadata.": "Il client non ha inoltrato i metadati di lettura.",
+    "Cannot read this book: {error}": "Impossibile leggere il libro: {error}",
+    "Text unavailable": "Testo non disponibile", "End of book": "Fine del libro",
+    "Extracted text · {percent}% · {format}": "Testo estratto · {percent}% · {format}"
+  };
+  let language = typeof navigator !== "undefined" && /^it/i.test(navigator.language) ? "it" : "en";
+  let userLanguage = false, currentView = null;
+  function tr(key, values = {}) {
+    return (language === "it" ? IT[key] || key : key).replace(/\{(\w+)\}/g, (_, k) => String(values[k] ?? ""));
+  }
+  function localize() {
+    document.documentElement.lang = language;
+    document.getElementById("language").value = language;
+    document.querySelectorAll("[data-i18n]").forEach(e => { e.textContent = tr(e.dataset.i18n); });
+    document.querySelectorAll("[data-label]").forEach(e => { e.setAttribute("aria-label", tr(e.dataset.label)); });
+    document.getElementById("natural").title = tr("Original size of the received image");
+    document.getElementById("viewport").setAttribute("aria-label", tr("Image: Ctrl + wheel to zoom; arrow keys to scroll"));
+    const msg = document.getElementById("msg");
+    if (msg.textContent === "Loading content…" || msg.textContent === IT["Loading content…"]) msg.textContent = tr("Loading content…");
+  }
+  document.getElementById("language").addEventListener("change", ev => {
+    language = ev.target.value === "it" ? "it" : "en";
+    userLanguage = true;
+    localize();
+    if (reading && reading.result) drawReading(reading.result);
+    else if (currentView) (currentView.quotes ? renderQuotes : render)(currentView.data);
+  });
+  localize();
+  const REQUEST_TIMEOUT = 15000;
+  let imageCleanups = [];
+  let receivedResult = false;
+  const deliveryTimer = setTimeout(() => {
+    if (!receivedResult) document.getElementById("msg").textContent = tr("Content has not arrived. Ask the assistant to show it again.");
+  }, 20000);
 
   function post(msg) { parentWin.postMessage(msg, "*"); }
   function request(method, params) {
     const id = nextId++;
-    post({ jsonrpc: "2.0", id, method, params });
-    return new Promise((resolve, reject) => pending.set(id, { resolve, reject }));
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        pending.delete(id);
+        reject(new Error(tr("The client did not respond. Try again.")));
+      }, REQUEST_TIMEOUT);
+      pending.set(id, { resolve, reject, timer });
+      post({ jsonrpc: "2.0", id, method, params });
+    });
   }
   function notify(method, params) { post({ jsonrpc: "2.0", method, params: params || {} }); }
+  function withTimeout(promise) {
+    let timer;
+    return Promise.race([promise, new Promise((_, reject) => {
+      timer = setTimeout(() => reject(new Error(tr("Operation timed out. Try again."))), REQUEST_TIMEOUT);
+    })]).finally(() => clearTimeout(timer));
+  }
 
   function applyHostContext(ctx) {
     if (!ctx) return;
+    if (!userLanguage && typeof ctx.locale === "string") { language = /^it/i.test(ctx.locale) ? "it" : "en"; localize(); }
     if (ctx.theme === "light" || ctx.theme === "dark") document.documentElement.dataset.theme = ctx.theme;
     const vars = ctx.styles && ctx.styles.variables;
     if (vars && typeof vars === "object") {
@@ -124,16 +255,16 @@
     return /\.png$/i.test(s) ? s : s + ".png";
   }
   async function copyPng(it, img, st) {
-    st.textContent = "";
+    st.textContent = tr("Copying…");
     try {
       if (!navigator.clipboard || typeof ClipboardItem === "undefined") throw new Error("no Clipboard API");
-      await navigator.clipboard.write([new ClipboardItem({ "image/png": pngBlob(it, img) })]);
-      st.textContent = "Copied as PNG: paste it anywhere.";
+      await withTimeout(navigator.clipboard.write([new ClipboardItem({ "image/png": pngBlob(it, img) })]));
+      st.textContent = tr("Copied as PNG: paste it anywhere.");
     } catch (e) {
       // Fallback for hosts that deny the Clipboard API (e.g. opaque-origin sandboxes): copy the image as a
       // selection. Office apps, Outlook and most editors paste it as an image.
-      if (copyBySelection(img)) st.textContent = "Copied: paste it into Word, PowerPoint, Outlook or an editor.";
-      else st.textContent = "This client blocks clipboard access from the gallery. Use Save PNG, or drag the image out.";
+      if (copyBySelection(img)) st.textContent = tr("Copied: paste it into Word, PowerPoint, Outlook or an editor.");
+      else st.textContent = tr("This client blocks clipboard access from the gallery. Use Save PNG, or drag the image out.");
     }
     reportSize();
   }
@@ -148,23 +279,23 @@
     } catch (e) { return false; }
   }
   async function savePng(it, img, st) {
-    st.textContent = "";
+    st.textContent = tr("Preparing PNG…");
     const name = safeName(it.filename);
     try {
-      const blob = await pngBlob(it, img);
+      const blob = await withTimeout(pngBlob(it, img));
       if (hostCaps.downloadFile) {                      // preferred: the host saves the file (ui/download-file)
         await request("ui/download-file", { contents: [{ type: "resource",
-          resource: { uri: "file:///" + name, mimeType: "image/png", blob: await blobToB64(blob) } }] });
-        st.textContent = "Saved " + name;
+          resource: { uri: "file:///" + name, mimeType: "image/png", blob: await withTimeout(blobToB64(blob)) } }] });
+        st.textContent = tr("Download request accepted: {name}", {name});
       } else {                                          // fallback: native download from the frame
         const a = document.createElement("a");
         a.href = URL.createObjectURL(blob); a.download = name;
         document.body.appendChild(a); a.click(); a.remove();
         setTimeout(() => URL.revokeObjectURL(a.href), 30000);
-        st.textContent = "Download started (" + name + "). If nothing was saved, this client blocks downloads: use Copy PNG.";
+        st.textContent = tr("Download started ({name}). If nothing was saved, this client blocks downloads: use Copy PNG.", {name});
       }
     } catch (e) {
-      st.textContent = "Save failed: " + (e && e.message ? e.message : "blocked by the client") + ". Try Copy PNG.";
+      st.textContent = tr("Save failed: {error}. Try Copy PNG.", {error: e && e.message ? e.message : tr("Text unavailable")});
     }
     reportSize();
   }
@@ -176,50 +307,319 @@
     return e;
   }
 
+  const zoom = document.getElementById("zoom"), viewport = document.getElementById("viewport");
+  const zimg = document.getElementById("zimg");
+  let zoomTrigger = null, drag = null, backdropDown = false, ignoreDoubleClickUntil = 0;
+  function outsideDialog(ev) {
+    const r = zoom.getBoundingClientRect();
+    return ev.clientX < r.left || ev.clientX > r.right || ev.clientY < r.top || ev.clientY > r.bottom;
+  }
+  zoom.addEventListener("pointerdown", ev => {
+    backdropDown = ev.button === 0 && ev.target === zoom && outsideDialog(ev);
+  });
+  zoom.addEventListener("pointercancel", () => { backdropDown = false; });
+  zoom.addEventListener("click", ev => {
+    if (backdropDown && ev.target === zoom && outsideDialog(ev)) closeZoom();
+    backdropDown = false;
+  });
+  viewport.addEventListener("dblclick", ev => {
+    // Pointer capture during panning can retarget a double click to the viewport.
+    const r = zimg.getBoundingClientRect();
+    if (ev.button !== 0 || Date.now() < ignoreDoubleClickUntil ||
+        ev.clientX < r.left || ev.clientX > r.right || ev.clientY < r.top || ev.clientY > r.bottom) return;
+    ev.preventDefault();
+    setZoomMode(!viewport.classList.contains("natural"));
+  });
+  function setZoomMode(natural) {
+    viewport.className = natural ? "viewport natural" : "viewport fit";
+    document.getElementById("fit").setAttribute("aria-pressed", String(!natural));
+    document.getElementById("natural").setAttribute("aria-pressed", String(natural));
+    zimg.style.width = natural ? zimg.naturalWidth + "px" : "";
+    zimg.style.height = natural ? zimg.naturalHeight + "px" : "";
+    document.getElementById("zoom-level").textContent = natural ? "100%" : tr("Fit");
+    viewport.scrollTop = viewport.scrollLeft = 0;
+  }
+  viewport.addEventListener("wheel", ev => {
+    if (!ev.ctrlKey || !zoom.open || !zimg.naturalWidth) return;
+    ev.preventDefault(); // handle image zoom instead of the browser's Ctrl+wheel zoom
+    if (!ev.deltaY) return;
+    endDrag();
+    const before = zimg.getBoundingClientRect();
+    const u = Math.max(0, Math.min(1, (ev.clientX - before.left) / before.width));
+    const v = Math.max(0, Math.min(1, (ev.clientY - before.top) / before.height));
+    const unit = ev.deltaMode === 1 ? 16 : ev.deltaMode === 2 ? viewport.clientHeight : 1;
+    const delta = Math.max(-200, Math.min(200, ev.deltaY * unit));
+    const scale = Math.max(0.05, Math.min(5, before.width / zimg.naturalWidth * Math.exp(-delta * 0.002)));
+    viewport.className = "viewport natural";
+    zimg.style.width = zimg.naturalWidth * scale + "px";
+    zimg.style.height = zimg.naturalHeight * scale + "px";
+    document.getElementById("fit").setAttribute("aria-pressed", "false");
+    document.getElementById("natural").setAttribute("aria-pressed", String(Math.abs(scale - 1) < 0.0001));
+    document.getElementById("zoom-level").textContent = Math.round(scale * 100) + "%";
+    const after = zimg.getBoundingClientRect();
+    viewport.scrollLeft += after.left + u * after.width - ev.clientX;
+    viewport.scrollTop += after.top + v * after.height - ev.clientY;
+  }, { passive: false });
+  function openZoom(img, it, trigger) {
+    zoomTrigger = trigger;
+    zimg.src = img.src;
+    zimg.alt = img.alt;
+    document.getElementById("zoom-title").textContent = it.label || tr("Image");
+    document.getElementById("zoom-caption").textContent = [it.sublabel,
+      img.naturalWidth + " × " + img.naturalHeight + " px · " + tr("100% shows the received resolution.")].filter(Boolean).join(" · ");
+    setZoomMode(false);
+    zoom.showModal();
+    document.getElementById("close-zoom").focus();
+  }
+  function closeZoom() { if (zoom.open) zoom.close(); }
+  // The host chat is outside this sandbox. Focus loss is the signal available here.
+  window.addEventListener("blur", () => {
+    setTimeout(() => {
+      if (!zoom.open || document.hasFocus()) return;
+      const trigger = zoomTrigger, wasDisabled = trigger && trigger.disabled;
+      zoomTrigger = null;
+      // Native dialog.close() also restores focus. Temporarily make its old button
+      // unfocusable so a click in the host chat keeps its new focus target.
+      if (trigger) trigger.disabled = true;
+      closeZoom();
+      if (trigger) trigger.disabled = wasDisabled;
+    }, 0);
+  });
+  zoom.addEventListener("close", () => {
+    endDrag();
+    if (zoomTrigger && zoomTrigger.isConnected && document.hasFocus()) zoomTrigger.focus();
+    zoomTrigger = null;
+  });
+  zoom.addEventListener("keydown", ev => {
+    if (ev.key !== "Tab") return;
+    const first = document.getElementById("fit"), last = viewport;
+    if (ev.shiftKey && document.activeElement === first) {
+      ev.preventDefault(); last.focus();
+    } else if (!ev.shiftKey && document.activeElement === last) {
+      ev.preventDefault(); first.focus();
+    }
+  });
+  document.getElementById("close-zoom").addEventListener("click", closeZoom);
+  document.getElementById("fit").addEventListener("click", () => setZoomMode(false));
+  document.getElementById("natural").addEventListener("click", () => setZoomMode(true));
+  viewport.addEventListener("pointerdown", ev => {
+    if (!viewport.classList.contains("natural") || ev.button !== 0) return;
+    drag = { id: ev.pointerId, x: ev.clientX, y: ev.clientY, left: viewport.scrollLeft, top: viewport.scrollTop };
+    viewport.setPointerCapture(ev.pointerId);
+    viewport.classList.add("dragging");
+    viewport.focus();
+    ev.preventDefault();
+  });
+  viewport.addEventListener("pointermove", ev => {
+    if (!drag || drag.id !== ev.pointerId) return;
+    viewport.scrollLeft = drag.left + drag.x - ev.clientX;
+    viewport.scrollTop = drag.top + drag.y - ev.clientY;
+    if (Math.abs(drag.x - ev.clientX) > 4 || Math.abs(drag.y - ev.clientY) > 4) drag.moved = true;
+  });
+  function endDrag() {
+    if (drag && drag.moved) ignoreDoubleClickUntil = Date.now() + 350;
+    if (drag && viewport.hasPointerCapture(drag.id)) viewport.releasePointerCapture(drag.id);
+    drag = null;
+    viewport.classList.remove("dragging");
+  }
+  viewport.addEventListener("pointerup", endDrag);
+  viewport.addEventListener("pointercancel", endDrag);
+  viewport.addEventListener("lostpointercapture", endDrag);
+
+  const reader = document.getElementById("reader"), readerText = document.getElementById("reader-text");
+  const chapterSelect = document.getElementById("reader-chapter");
+  const prevRead = document.getElementById("reader-prev"), nextRead = document.getElementById("reader-next");
+  const retryRead = document.getElementById("reader-retry");
+  let reading = null, readTicket = 0, readerTrigger = null, readerFont = 17;
+  function readButton(item) {
+    const button = el("button", null, tr("Read"));
+    button.type = "button";
+    button.addEventListener("click", () => openReader(item, button));
+    return button;
+  }
+  function openReader(item, trigger) {
+    closeZoom();
+    readerTrigger = trigger;
+    reading = {book_id: item.book_id, format: item.format || null, library: item.library || null,
+               history: [], result: null, requested: {offset: item.offset || 0, history: []}};
+    document.getElementById("grid").hidden = true;
+    document.getElementById("msg").hidden = true;
+    reader.hidden = false;
+    document.getElementById("reader-title").textContent = item.label || "";
+    document.getElementById("reader-authors").textContent = "";
+    chapterSelect.textContent = "";
+    document.getElementById("reader-title").focus();
+    loadReading(item.offset || 0, []);
+    reportSize();
+  }
+  function closeReader(restoreFocus = true) {
+    readTicket++; // Ignore late responses after closing or selecting another source.
+    reading = null;
+    reader.hidden = true;
+    readerText.textContent = "";
+    document.getElementById("grid").hidden = false;
+    if (restoreFocus && readerTrigger && readerTrigger.isConnected) readerTrigger.focus();
+    readerTrigger = null;
+  }
+  function drawReading(r) {
+    document.getElementById("reader-title").textContent = r.title || "";
+    document.getElementById("reader-authors").textContent = (r.authors || []).join(", ");
+    readerText.textContent = r.text;
+    readerText.scrollTop = 0;
+    chapterSelect.textContent = "";
+    const chapters = Array.isArray(r.chapters) ? r.chapters : [];
+    let selected = 0;
+    chapters.forEach((c, i) => {
+      const option = el("option", null, c.title || tr("Chapter {n}", {n: i + 1}));
+      option.value = String(c.offset);
+      chapterSelect.appendChild(option);
+      if (c.offset <= r.offset) selected = i;
+    });
+    chapterSelect.selectedIndex = selected;
+    chapterSelect.disabled = !chapters.length;
+    const percent = Math.min(100, Math.round((r.offset + r.text.length) / Math.max(1, r.total_chars) * 100));
+    document.getElementById("reader-status").textContent = tr("Extracted text · {percent}% · {format}",
+      {percent, format: r.format}) + (r.next_offset == null ? " · " + tr("End of book") : "");
+    prevRead.disabled = !reading.history.length;
+    nextRead.disabled = r.next_offset == null;
+    retryRead.hidden = true;
+    reportSize();
+  }
+  async function loadReading(offset, history) {
+    if (!reading) return;
+    const ticket = ++readTicket;
+    reading.requested = {offset, history};
+    prevRead.disabled = nextRead.disabled = chapterSelect.disabled = true;
+    retryRead.hidden = true;
+    readerText.textContent = "";
+    document.getElementById("reader-status").textContent = tr("Loading text…");
+    reader.setAttribute("aria-busy", "true");
+    const args = {book_id: reading.book_id, offset, max_chars: 6000};
+    if (reading.format) args.format = reading.format;
+    if (reading.library) args.library = reading.library;
+    try {
+      const result = await request("tools/call", {name: "calibre_read_view", arguments: args});
+      if (ticket !== readTicket || !reading) return;
+      if (result.isError) throw new Error((result.content || []).map(c => c.text || "").join(" ") || tr("Text unavailable"));
+      const r = result._meta && result._meta.calibreReader;
+      if (!r || typeof r.text !== "string") throw new Error(tr("The client did not forward reading metadata."));
+      reading.history = history;
+      reading.result = r;
+      reading.format = r.format;
+      reading.library = r.library || reading.library;
+      drawReading(r);
+    } catch (e) {
+      if (ticket !== readTicket || !reading) return;
+      document.getElementById("reader-status").textContent = tr("Cannot read this book: {error}", {error: e.message || tr("Text unavailable")});
+      retryRead.hidden = false;
+    } finally {
+      if (ticket === readTicket) { reader.setAttribute("aria-busy", "false"); reportSize(); }
+    }
+  }
+  document.getElementById("reader-close").addEventListener("click", () => { closeReader(); reportSize(); });
+  nextRead.addEventListener("click", () => {
+    if (reading && reading.result && reading.result.next_offset != null)
+      loadReading(reading.result.next_offset, [...reading.history, reading.result.offset]);
+  });
+  prevRead.addEventListener("click", () => {
+    if (reading && reading.history.length) loadReading(reading.history[reading.history.length - 1], reading.history.slice(0, -1));
+  });
+  chapterSelect.addEventListener("change", () => loadReading(Number(chapterSelect.value), []));
+  retryRead.addEventListener("click", () => { if (reading) loadReading(reading.requested.offset, reading.requested.history); });
+  function resizeText(delta) {
+    readerFont = Math.max(13, Math.min(26, readerFont + delta));
+    readerText.style.fontSize = readerFont + "px";
+    document.getElementById("font-down").disabled = readerFont === 13;
+    document.getElementById("font-up").disabled = readerFont === 26;
+    reportSize();
+  }
+  document.getElementById("font-down").addEventListener("click", () => resizeText(-1));
+  document.getElementById("font-up").addEventListener("click", () => resizeText(1));
+  function resetImages() {
+    closeReader(false);
+    closeZoom();
+    imageCleanups.forEach(cleanup => cleanup());
+    imageCleanups = [];
+  }
+
   function render(data) {
+    currentView = {data, quotes: false};
     const grid = document.getElementById("grid");
     const msg = document.getElementById("msg");
+    resetImages();
     grid.textContent = "";
     const imgs = Array.isArray(data && data.images) ? data.images : [];
     const h = document.getElementById("title");
     h.textContent = data && data.title ? String(data.title) : "";
     h.hidden = !h.textContent;
-    document.getElementById("zoom").classList.remove("on");
     let shown = 0;
     for (const it of imgs) {
       if (!it || !ALLOWED_MIME.has(it.mime) || typeof it.data !== "string" || !/^[A-Za-z0-9+/=]+$/.test(it.data)) continue;
       const fig = el("figure");
       const frame = el("div", "frame");
+      const preview = el("button", "preview");
+      preview.type = "button";
+      preview.disabled = true;
+      preview.setAttribute("aria-label", tr("Enlarge {title}", {title: it.label || tr("Image")}));
       const img = el("img");
       img.alt = String(it.alt || it.label || "image");
-      img.src = "data:" + it.mime + ";base64," + it.data;
+      img.hidden = true;
       if (it.width && it.height) { img.width = it.width; img.height = it.height; }
-      img.addEventListener("click", () => {
-        const z = document.getElementById("zoom");
-        document.getElementById("zimg").src = img.src;
-        z.classList.add("on");
-      });
-      frame.appendChild(img);
+      preview.addEventListener("click", () => openZoom(img, it, preview));
+      preview.appendChild(img);
+      frame.appendChild(preview);
+      const imageState = el("span", "image-state", tr("Loading image…"));
+      imageState.setAttribute("role", "status");
+      frame.appendChild(imageState);
       fig.appendChild(frame);
       const cap = el("figcaption");
       cap.appendChild(el("div", "t", it.label || ""));
       if (it.sublabel) cap.appendChild(el("div", "s", it.sublabel));
       fig.appendChild(cap);
       const bar = el("div", "bar"), st = el("div", "st");
-      const bCopy = el("button", null, "Copy PNG"), bSave = el("button", null, "Save PNG");
+      st.setAttribute("role", "status");
+      const bCopy = el("button", null, tr("Copy PNG")), bSave = el("button", null, tr("Save PNG"));
       bCopy.type = bSave.type = "button";
-      bCopy.title = "Copy this image to the clipboard as PNG";
-      bSave.title = "Save this image as a PNG file";
-      bCopy.addEventListener("click", () => copyPng(it, img, st));
-      bSave.addEventListener("click", () => savePng(it, img, st));
+      bCopy.title = tr("Copy this image to the clipboard as PNG");
+      bSave.title = tr("Save this image as a PNG file");
+      bCopy.disabled = bSave.disabled = true;
+      function exportImage(button, action) {
+        button.addEventListener("click", async () => {
+          bCopy.disabled = bSave.disabled = true;
+          try { await action(it, img, st); }
+          finally { bCopy.disabled = bSave.disabled = false; }
+        });
+      }
+      exportImage(bCopy, copyPng);
+      exportImage(bSave, savePng);
+      const imageTimer = setTimeout(() => failed(tr("Image loading timed out. Ask the assistant to show it again.")), REQUEST_TIMEOUT);
+      function failed(message) {
+        clearTimeout(imageTimer);
+        img.hidden = true;
+        preview.disabled = bCopy.disabled = bSave.disabled = true;
+        imageState.hidden = false;
+        imageState.textContent = message;
+        reportSize();
+      }
+      img.onload = () => {
+        clearTimeout(imageTimer);
+        img.hidden = false;
+        imageState.hidden = true;
+        preview.disabled = bCopy.disabled = bSave.disabled = false;
+        reportSize();
+      };
+      img.onerror = () => failed(tr("This image could not be loaded. Ask the assistant to show it again."));
+      imageCleanups.push(() => { clearTimeout(imageTimer); img.onload = img.onerror = null; });
+      img.src = "data:" + it.mime + ";base64," + it.data;
       bar.appendChild(bCopy); bar.appendChild(bSave);
+      if (Number.isInteger(it.book_id) && it.book_id > 0) bar.appendChild(readButton(it));
       fig.appendChild(bar); fig.appendChild(st);
       grid.appendChild(fig);
       shown++;
     }
     grid.classList.toggle("single", shown === 1);
     msg.hidden = shown > 0;
-    if (!shown) msg.textContent = "No image to display.";
+    if (!shown) msg.textContent = tr("No image to display.");
     const errs = Array.isArray(data && data.errors) ? data.errors : [];
     const eb = document.getElementById("errors");
     eb.textContent = errs.map(e => "• " + String(e)).join("\n");
@@ -229,12 +629,13 @@
   }
 
   function renderQuotes(data) {
+    currentView = {data, quotes: true};
     const grid = document.getElementById("grid");
+    resetImages();
     grid.textContent = "";
     grid.className = "grid single";
-    document.getElementById("zoom").classList.remove("on");
     const heading = document.getElementById("title");
-    heading.textContent = data.title || "Book quotations";
+    heading.textContent = data.title || tr("Book quotations");
     heading.hidden = false;
     document.getElementById("errors").hidden = true;
     const passages = Array.isArray(data.passages) ? data.passages : [];
@@ -246,18 +647,26 @@
       cap.appendChild(el("div", "t", it.label || ""));
       const authors = Array.isArray(it.authors) ? it.authors.join(", ") : "";
       cap.appendChild(el("div", "s", authors));
-      cap.appendChild(el("div", "s", "#" + it.book_id + " · " + it.format +
-        " · characters [" + it.offset + ", " + it.end_offset + ") in extracted text"));
+      const location = it.location || {};
+      if (location.chapter) cap.appendChild(el("div", "s", location.chapter));
+      if (typeof location.percent === "number") cap.appendChild(el("div", "s",
+        tr("Position in extracted text: {percent}%", {percent: location.percent})));
+      const details = el("details", "reference-details");
+      details.appendChild(el("summary", null, tr("Source details")));
+      details.appendChild(el("div", null, tr("Characters [{start}, {end}) · {format} · book #{book}",
+        {start: it.offset, end: it.end_offset, format: it.format, book: it.book_id})));
+      cap.appendChild(details);
       fig.appendChild(cap);
+      const bar = el("div", "bar");
+      bar.appendChild(readButton(it));
+      fig.appendChild(bar);
       grid.appendChild(fig);
     }
     const msg = document.getElementById("msg");
-    msg.textContent = grid.childElementCount ? "" : "No quotations to display.";
+    msg.textContent = grid.childElementCount ? "" : tr("No quotations to display.");
     msg.hidden = grid.childElementCount > 0;
     reportSize();
   }
-
-  document.getElementById("zoom").addEventListener("click", () => document.getElementById("zoom").classList.remove("on"));
 
   let lastH = 0, lastW = 0, ready = false;   // no notifications before the ui/initialize handshake completes
   function reportSize() {
@@ -277,20 +686,27 @@
       const p = pending.get(m.id);
       if (!p) return;
       pending.delete(m.id);
+      clearTimeout(p.timer);
       m.error ? p.reject(new Error(m.error.message || "host error")) : p.resolve(m.result);
       return;
     }
     if (m.method === "ui/notifications/tool-result") {
+      receivedResult = true;
+      clearTimeout(deliveryTimer);
       const r = m.params || {};
+      if (r._meta && r._meta.calibreReader || r.structuredContent && r.structuredContent.reference) return;
       if (r._meta && r._meta.calibreQuotes) renderQuotes(r._meta.calibreQuotes);
       else if (r.structuredContent && Array.isArray(r.structuredContent.references)) {
         renderQuotes({ passages: [] });
-        document.getElementById("msg").textContent = "This client did not forward quotation view metadata. Reconnect with an MCP Apps-compatible client.";
+        document.getElementById("msg").textContent = tr("This client did not forward quotation view metadata. Reconnect with an MCP Apps-compatible client.");
       } else render(r.structuredContent || {});
     } else if (m.method === "ui/notifications/host-context-changed") {
       applyHostContext(m.params);
     } else if (m.method === "ui/notifications/tool-cancelled") {
-      document.getElementById("msg").textContent = "Cancelled.";
+      clearTimeout(deliveryTimer);
+      resetImages();
+      document.getElementById("msg").textContent = tr("Cancelled.");
+      document.getElementById("msg").hidden = false;
       reportSize();
     } else if (m.id != null && m.method) {               // host -> view requests
       if (m.method === "ui/resource-teardown" || m.method === "ping") post({ jsonrpc: "2.0", id: m.id, result: {} });
@@ -299,7 +715,7 @@
   });
 
   request("ui/initialize", {
-    appInfo: { name: "calibre-mcp-gallery", version: "1.1.0" },
+    appInfo: { name: "calibre-mcp-gallery", version: "1.3.0" },
     appCapabilities: { availableDisplayModes: ["inline"] },
     protocolVersion: PROTOCOL,
   }).then((res) => {
@@ -309,7 +725,9 @@
     ready = true;
     reportSize();
   }).catch(() => {
-    document.getElementById("msg").textContent = "This client cannot display MCP App views.";
+    clearTimeout(deliveryTimer);
+    document.getElementById("msg").textContent = tr("This client cannot display MCP App views.");
+    document.getElementById("msg").hidden = false;
   });
 })();
 </script>

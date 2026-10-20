@@ -1,5 +1,14 @@
 # Changelog
 
+**5.4.1 - In-place reading and gallery UX (2026-10-20)**
+
+- add: Read buttons on images and quotations; progressive plain-text reading, chapter selection, previous/next windows and font size controls. The app-only `calibre_read_view` preserves library/format selection and sends book text only in view metadata.
+- add: Italian/English view labels, automatic locale selection and manual language switch; chapter and percentage references for quotations, with exact offsets in expandable source details.
+- add: accessible Fit/100% image viewer, double-click, cursor-anchored Ctrl+wheel zoom, panning, backdrop/focus-loss dismissal, export feedback and bounded waits. Preserve the gallery grid and PNG copy/save fallbacks.
+- test: reader metadata isolation, pagination, source binding, UI interactions, localization and regression checks. Updated clients must refresh their MCP tool list after restarting the server.
+
+- docs: dedicated English/Italian reading-and-images chapter, short visual README tour and preserved links from the technical manual. Six screenshots render the real gallery, reader and quotations with a wholly fictional book, cover, figures and text; `presentation/render_ux_demo.py` reproduces them without accessing Calibre.
+
 **5.4.0 - Verbatim quotations in the chat's HTML view (2026-10-20)**
 
 - add: `calibre_show_quotes` — extracts passages directly from a selected library and displays them in the same inline MCP Apps HTML view as covers and figures, with title, authors, format and exact character range.

@@ -1,6 +1,6 @@
 # Tweaking and under the hood
 
-[← README](../../README.md) · [Installation](installation.md) · **Tweaking and under the hood** · [Skills](skills.md) · [FAQ and troubleshooting](faq.md) · [Performance](performance.md)
+[← README](../../README.md) · [Installation](installation.md) · **Tweaking and under the hood** · [Reading and images](reading-and-images.md) · [Skills](skills.md) · [FAQ and troubleshooting](faq.md) · [Performance](performance.md)
 
 🇬🇧 English · [🇮🇹 Italiano](../it/tweaking.md)
 
@@ -29,7 +29,7 @@ flowchart LR
   end
   subgraph SV["calibre_mcp.py — read-only MCP server"]
     TR["Transports<br/>stdio · Streamable HTTP (bearer, Host/Origin checks, TLS)"]
-    RG["MCP surface<br/>31 tools · 4 resources · 5 prompts · gallery UI<br/>per-call library selection"]
+    RG["MCP surface<br/>31 tools + 1 internal · 4 resources · 5 prompts · gallery UI<br/>per-call library selection"]
     QM["Metadata & curation<br/>query.py · quality.py · isbn.py"]
     TX["Text access<br/>extraction chain · OCR · structure.py · htmlmd.py · ocr.py"]
     SE["Search<br/>FTS5 · highlight.py · semantic.py"]
@@ -452,97 +452,15 @@ selected with `CALIBRE_MCP_EMBED_MODEL`; the index is tied to the model, so chan
 
 ## Showing images in the chat
 
-Images returned by an ordinary MCP tool reach the model, but most clients show them only inside the folded
-tool-call block, and the model cannot reuse them in files. `calibre_show_images` displays covers and figures
-**to the user, inline in the conversation**, using the official MCP Apps extension (SEP-1865):
+The user interface is documented in the dedicated chapter: [Showing images in the chat](reading-and-images.md#showing-images-in-the-chat).
 
-- the tool declares an interface (`_meta.ui.resourceUri = ui://calibre-mcp/gallery`), a self-contained HTML
-  gallery that the client renders in a sandboxed frame inside the chat;
-- the images travel in `structuredContent`, which goes to the gallery and **not into the model's context**:
-  showing images costs no model tokens, and the model receives only a short text summary;
-- everything stays read-only: no files are written, the gallery has no network access (images are
-  `data:` URIs, allowed by the restrictive default CSP of the spec), and nothing leaves the machine.
+## In-place reader and view language
 
-Example request to the assistant: "show me the covers of 1168 and 1164", or "show figure s3-2 of 1164".
-
-**Copying and saving.** Every image has two buttons, both producing a real PNG (JPEG sources are converted in
-the browser), with the server still writing nothing:
-
-| Button | How | Depends on the client |
-|---|---|---|
-| Copy PNG | Clipboard API (`image/png`); the gallery declares the spec's `clipboardWrite` permission | If the client denies clipboard access, it falls back to copying the image as a selection, which Word, PowerPoint, Outlook and most editors paste as an image |
-| Save PNG | Asks the client to save the file (`ui/download-file`), so the download goes through the client's own flow | Clients without that request use the frame's native download; if downloads are blocked too, the status line says so |
-
-Dragging an image out of the gallery into another application also works in most clients.
-
-**Client support.** MCP Apps is supported by Claude (web and desktop) and ChatGPT, among others. A client
-without it shows only the text summary: the summary tells the model to retry with `also_for_model=true`,
-which also attaches small thumbnails for the model (inside the tool block, costing image tokens) so it can
-describe them. Rendering issues have been reported on some Claude Desktop for Windows builds; the fallback
-covers that case too.
-
-**Security of the view.** Captions and titles come from the books, so they are inserted as text, never as
-HTML; only PNG and JPEG data are rendered (SVG and anything else is dropped); the gallery accepts messages
-only from its parent frame and loads nothing external. These properties are tested in a real browser
-(`tests/test_gallery_browser.py`, `tests/test_gallery_copy_save.py`), including hostile captions and payloads.
+The user interface is documented in the dedicated chapter: [In-place reader and view language](reading-and-images.md#in-place-reader-and-view-language).
 
 ## Showing verbatim quotations in the chat
 
-`calibre_show_quotes` uses the same sandboxed HTML view as the image gallery. The passage appears
-inline in the conversation in clients that support MCP Apps, rather than as Markdown in the assistant's
-message or a link to a separate HTML file. The server does not write an HTML file for each quotation.
-
-Find the passage with `calibre_find_in_book`, `calibre_search_fulltext` or `calibre_search_semantic`, then
-pass its reference using the **same format** as the search result:
-
-```json
-{
-  "passages": [{"book_id": 1168, "format": "EPUB", "offset": 1200, "max_chars": 424}],
-  "title": "Selected passage",
-  "library": "My library"
-}
-```
-
-`title` and `library` are optional; omit `library` to use the primary library. IDs and offsets above
-are illustrative: use those returned by your own library. A search offset identifies a match, not
-necessarily the start of a sentence; choose the start and character count for the passage you want.
-Do not send a `text` field: the server reads the source itself and rejects extra passage fields.
-
-| Parameter | Meaning |
-|---|---|
-| `passages` | 1–12 source references; references can address different books in the selected library |
-| `book_id` | Required positive Calibre book ID |
-| `format` | Optional source format; use the format associated with the offset to avoid selecting a different text |
-| `offset` | Zero-based character offset in extracted plain text; default `0` |
-| `max_chars` | 1–6000 characters, default `1000`; also capped by `CALIBRE_MCP_MAX_CHARS` and the end of the text |
-| `title` | Optional view heading, at most 200 characters |
-| `library` | Optional library name from `calibre_list_libraries` |
-
-**Exactness and references.** Text is sliced directly from the extracted source without trimming words,
-normalizing spaces or adding quotation marks. The view shows title, authors, format and `[offset, end_offset)`;
-`end_offset` is exclusive. These are character positions, not page numbers or EPUB section indices.
-Extraction or OCR can differ from the original typography. Re-extracting, replacing a book or switching
-formats can change offsets: search again rather than reusing an old reference. A missing book, unavailable
-text or out-of-range offset fails the whole call; no partial quotation list is returned.
-
-**What reaches the model.** Passage text and attribution travel in result `_meta.calibreQuotes`, intended
-for the view. `content` contains a short summary; `structuredContent` contains only `count` and references
-(`book_id`, `format`, `offset`, `end_offset`). Titles, authors and passage text are inserted as text rather
-than executable HTML. The client still receives the text to display it; this is a view/model separation,
-not a guarantee about client logging or storage. Earlier search/read calls may already have returned
-passage text to the model. This tool does not remove that text from conversation history.
-
-**Upgrade and client support.** Restart the server after updating and reconnect or refresh the client's
-MCP tool list. No new Python dependency, re-indexing or index migration is needed for this feature.
-The client must support MCP Apps and forward result `_meta` in `ui/notifications/tool-result`.
-Without MCP Apps only the summary is available; if metadata is stripped, the HTML view displays a
-diagnostic message. Quotations have no `also_for_model` option and are not automatically copied into chat.
-Opening an HTML file in a browser does not test this MCP Apps connection.
-
-**Verification.** Run `python -m unittest discover -s tests -p test_quotes.py` and
-`node tests/test_quotes_view.cjs` for extraction, metadata and DOM checks. The browser scenarios in
-`tests/test_gallery_browser.py` also cover quotations (requires the fake library, Playwright and Chromium,
-as described in that test). A passing local preview does not confirm support in every MCP client.
+The user interface is documented in the dedicated chapter: [Showing verbatim quotations in the chat](reading-and-images.md#showing-verbatim-quotations-in-the-chat).
 
 ## Environment variables
 

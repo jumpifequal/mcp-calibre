@@ -1,6 +1,6 @@
 # Skill: i libri che lavorano per te
 
-[← README](../../README.it.md) · [Installazione](installation.md) · [Personalizzazione e funzionamento interno](tweaking.md) · **Skill** · [FAQ e risoluzione dei problemi](faq.md) · [Prestazioni](performance.md)
+[← README](../../README.it.md) · [Installazione](installation.md) · [Personalizzazione e funzionamento interno](tweaking.md) · **Skill** · [FAQ e risoluzione dei problemi](faq.md) · [Prestazioni](performance.md) · [Lettura e immagini](reading-and-images.md)
 
 [🇬🇧 English](../en/skills.md) · 🇮🇹 Italiano
 

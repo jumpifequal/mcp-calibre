@@ -11,7 +11,7 @@ sys.argv = ["x"]; sys.path.insert(0, str(here.parent))
 os.environ.setdefault("CALIBRE_LIBRARY", str(here / "Calibre Library"))
 os.environ.setdefault("CALIBRE_MCP_DATA", tempfile.mkdtemp())
 try:
-    from playwright.sync_api import sync_playwright
+    from playwright.sync_api import sync_playwright, expect
 except ImportError:
     print("SKIP: playwright not installed"); sys.exit(0)
 from PIL import Image as PIL
@@ -75,7 +75,8 @@ READ_HTML = """async () => { const it = (await navigator.clipboard.read())[0];
 with sync_playwright() as p:
     br = p.chromium.launch()
     ctx = br.new_context(); pg = ctx.new_page(); pg.goto(base + "/a.html"); pg.wait_for_timeout(800)
-    fr = pg.frame_locator("#v"); fr.get_by_role("button", name="Save PNG").click(); pg.wait_for_timeout(600)
+    fr = pg.frame_locator("#v"); fr.get_by_role("button", name="Save PNG").click()
+    expect(fr.locator(".st")).to_contain_text("Download request accepted")
     dl = pg.evaluate("window.__dl")
     r = dl and dl["contents"][0]["resource"]
     check("A: Save uses ui/download-file when the host supports it", r and r["mimeType"] == "image/png" and r["uri"].endswith(".png"), dl)

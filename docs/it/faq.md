@@ -1,6 +1,6 @@
 # FAQ e risoluzione dei problemi
 
-[← README](../../README.it.md) · [Installazione](installation.md) · [Personalizzazione e funzionamento interno](tweaking.md) · [Skill](skills.md) · **FAQ e risoluzione dei problemi** · [Prestazioni](performance.md)
+[← README](../../README.it.md) · [Installazione](installation.md) · [Personalizzazione e funzionamento interno](tweaking.md) · [Lettura e immagini](reading-and-images.md) · [Skill](skills.md) · **FAQ e risoluzione dei problemi** · [Prestazioni](performance.md)
 
 [🇬🇧 English](../en/faq.md) · 🇮🇹 Italiano
 

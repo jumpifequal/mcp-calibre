@@ -1,6 +1,6 @@
 # Prestazioni
 
-[← README](../../README.it.md) · [Installazione](installation.md) · [Personalizzazione e funzionamento interno](tweaking.md) · [Skill](skills.md) · [FAQ e risoluzione dei problemi](faq.md) · **Prestazioni**
+[← README](../../README.it.md) · [Installazione](installation.md) · [Personalizzazione e funzionamento interno](tweaking.md) · [Lettura e immagini](reading-and-images.md) · [Skill](skills.md) · [FAQ e risoluzione dei problemi](faq.md) · **Prestazioni**
 
 [🇬🇧 English](../en/performance.md) · 🇮🇹 Italiano
 

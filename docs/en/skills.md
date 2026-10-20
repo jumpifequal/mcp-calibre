@@ -1,6 +1,6 @@
 # Skills: books that work for you
 
-[← README](../../README.md) · [Installation](installation.md) · [Tweaking and under the hood](tweaking.md) · **Skills** · [FAQ and troubleshooting](faq.md) · [Performance](performance.md)
+[← README](../../README.md) · [Installation](installation.md) · [Tweaking and under the hood](tweaking.md) · **Skills** · [FAQ and troubleshooting](faq.md) · [Performance](performance.md) · [Reading and images](reading-and-images.md)
 
 🇬🇧 English · [🇮🇹 Italiano](../it/skills.md)
 

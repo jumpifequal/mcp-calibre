@@ -1,6 +1,6 @@
 # Personalizzazione e funzionamento interno
 
-[← README](../../README.it.md) · [Installazione](installation.md) · **Personalizzazione e funzionamento interno** · [Skill](skills.md) · [FAQ e risoluzione dei problemi](faq.md) · [Prestazioni](performance.md)
+[← README](../../README.it.md) · [Installazione](installation.md) · **Personalizzazione e funzionamento interno** · [Lettura e immagini](reading-and-images.md) · [Skill](skills.md) · [FAQ e risoluzione dei problemi](faq.md) · [Prestazioni](performance.md)
 
 [🇬🇧 English](../en/tweaking.md) · 🇮🇹 Italiano
 
@@ -30,7 +30,7 @@ flowchart LR
   end
   subgraph SV["calibre_mcp.py — server MCP in sola lettura"]
     TR["Trasporti<br/>stdio · Streamable HTTP (bearer, controlli Host/Origin, TLS)"]
-    RG["Superficie MCP<br/>31 tool · 4 resources · 5 prompts · galleria UI<br/>libreria scelta per singola chiamata"]
+    RG["Superficie MCP<br/>31 tool + 1 interno · 4 resources · 5 prompts · galleria UI<br/>libreria scelta per singola chiamata"]
     QM["Metadati e curation<br/>query.py · quality.py · isbn.py"]
     TX["Accesso al testo<br/>catena di estrazione · OCR · structure.py · htmlmd.py · ocr.py"]
     SE["Ricerca<br/>FTS5 · highlight.py · semantic.py"]
@@ -461,101 +461,15 @@ sopra, oppure usa `CALIBRE_MCP_EMBED_BACKEND=hash` (fallback lessicale offline, 
 
 ## Mostrare le immagini nella chat
 
-Le immagini restituite da un normale tool MCP arrivano al modello, ma la maggior parte dei client le mostra
-solo dentro il blocco ripiegato della chiamata al tool, e il modello non può riusarle nei file.
-`calibre_show_images` mostra copertine e figure **all'utente, in linea nella conversazione**, usando
-l'estensione ufficiale MCP Apps (SEP-1865):
+L'interfaccia è descritta nel capitolo dedicato: [Mostrare le immagini nella chat](reading-and-images.md#mostrare-le-immagini-nella-chat).
 
-- il tool dichiara un'interfaccia (`_meta.ui.resourceUri = ui://calibre-mcp/gallery`), una galleria HTML
-  autonoma che il client visualizza in un riquadro isolato (sandbox) dentro la chat;
-- le immagini viaggiano in `structuredContent`, che va alla galleria e **non nel contesto del modello**:
-  mostrare immagini non costa token, e il modello riceve solo un breve riepilogo testuale;
-- tutto resta in sola lettura: nessun file viene scritto, la galleria non ha accesso alla rete (le immagini
-  sono URI `data:`, ammessi dalla CSP restrittiva predefinita della specifica) e nulla esce dalla macchina.
+## Lettore in-place e lingua della vista
 
-Esempio di richiesta all'assistente: "mostrami le copertine di 1168 e 1164", oppure "mostrami la figura s3-2
-di 1164".
-
-**Copiare e salvare.** Ogni immagine ha due pulsanti, che producono entrambi un vero PNG (le sorgenti JPEG
-vengono convertite nel browser), mentre il server continua a non scrivere nulla:
-
-| Pulsante | Come | Dipende dal client |
-|---|---|---|
-| Copy PNG | Clipboard API (`image/png`); la galleria dichiara il permesso `clipboardWrite` della specifica | Se il client nega l'accesso agli appunti, ripiega sulla copia dell'immagine come selezione, che Word, PowerPoint, Outlook e la maggior parte degli editor incollano come immagine |
-| Save PNG | Chiede al client di salvare il file (`ui/download-file`), quindi il download passa dal flusso del client | I client senza quella richiesta usano il download nativo del riquadro; se anche i download sono bloccati, la riga di stato lo segnala |
-
-Anche trascinare un'immagine fuori dalla galleria verso un'altra applicazione funziona nella maggior parte dei client.
-
-**Supporto dei client.** MCP Apps è supportato, tra gli altri, da Claude (web e desktop) e ChatGPT. Un client
-senza supporto mostra solo il riepilogo: il riepilogo indica al modello di riprovare con
-`also_for_model=true`, che allega anche piccole miniature per il modello (dentro il blocco del tool, con costo
-in token immagine) così può descriverle. Sono stati segnalati problemi di visualizzazione su alcune build di
-Claude Desktop per Windows; il fallback copre anche quel caso.
-
-**Sicurezza della vista.** Didascalie e titoli provengono dai libri, quindi vengono inseriti come testo, mai
-come HTML; vengono visualizzati solo dati PNG e JPEG (SVG e qualunque altro formato vengono scartati); la
-galleria accetta messaggi solo dal riquadro padre e non carica nulla dall'esterno. Queste proprietà sono
-verificate in un browser reale (`tests/test_gallery_browser.py`, `tests/test_gallery_copy_save.py`), con didascalie e payload ostili.
+L'interfaccia è descritta nel capitolo dedicato: [Lettore in-place e lingua della vista](reading-and-images.md#lettore-in-place-e-lingua-della-vista).
 
 ## Mostrare citazioni verbatim nella chat
 
-`calibre_show_quotes` usa la stessa vista HTML isolata della galleria di immagini. Nei client con
-supporto MCP Apps il passaggio compare inline nella conversazione, anziché come Markdown nel messaggio
-dell'assistente o collegamento a un file HTML separato. Il server non scrive un file HTML per ogni citazione.
-
-Trova il passaggio con `calibre_find_in_book`, `calibre_search_fulltext` o `calibre_search_semantic`, poi
-passa il riferimento usando **lo stesso formato** del risultato della ricerca:
-
-```json
-{
-  "passages": [{"book_id": 1168, "format": "EPUB", "offset": 1200, "max_chars": 424}],
-  "title": "Passaggio selezionato",
-  "library": "La mia libreria"
-}
-```
-
-`title` e `library` sono facoltativi; ometti `library` per usare la libreria principale. ID e offset sono
-esemplificativi: usa quelli restituiti dalla tua libreria. L'offset di ricerca identifica una corrispondenza,
-non necessariamente l'inizio di una frase; scegli l'inizio e il numero di caratteri del passaggio desiderato.
-Non inviare un campo `text`: il server legge la fonte e rifiuta i campi aggiuntivi nei riferimenti.
-
-| Parametro | Significato |
-|---|---|
-| `passages` | 1–12 riferimenti; possono indicare libri diversi nella libreria selezionata |
-| `book_id` | ID Calibre positivo, obbligatorio |
-| `format` | Formato facoltativo; usa quello associato all'offset per evitare di selezionare un testo diverso |
-| `offset` | Posizione del carattere nel testo estratto, a partire da zero; default `0` |
-| `max_chars` | 1–6000 caratteri, default `1000`; limitato anche da `CALIBRE_MCP_MAX_CHARS` e dalla fine del testo |
-| `title` | Titolo facoltativo della vista, massimo 200 caratteri |
-| `library` | Nome facoltativo della libreria, da `calibre_list_libraries` |
-
-**Esattezza e riferimenti.** Il testo viene prelevato direttamente dalla fonte estratta senza tagliare
-parole, normalizzare spazi o aggiungere virgolette. La vista mostra titolo, autori, formato e
-`[offset, end_offset)`; `end_offset` è escluso. Sono posizioni di caratteri, non numeri di pagina o indici
-di sezioni EPUB. L'estrazione o l'OCR possono differire dalla tipografia originale. Una nuova estrazione,
-la sostituzione del libro o il cambio di formato possono spostare gli offset: ripeti la ricerca anziché
-riutilizzare un riferimento vecchio. Libro mancante, testo non disponibile o offset fuori intervallo fanno
-fallire l'intera chiamata; non viene restituita una lista parziale di citazioni.
-
-**Cosa arriva al modello.** Testo e attribuzione viaggiano in `_meta.calibreQuotes` del risultato,
-destinato alla vista. `content` contiene un breve riepilogo; `structuredContent` contiene soltanto `count`
-e riferimenti (`book_id`, `format`, `offset`, `end_offset`). Titoli, autori e passaggi vengono inseriti come
-testo, mai come HTML eseguibile. Il client riceve comunque il testo per visualizzarlo: è una separazione
-fra vista e modello, non una garanzia su log o archiviazione del client. Le ricerche e letture precedenti
-potrebbero avere già restituito il passaggio al modello; questo tool non lo rimuove dalla cronologia.
-
-**Aggiornamento e supporto del client.** Dopo l'aggiornamento riavvia il server e riconnetti il client
-o aggiorna il suo elenco di tool MCP. Questa funzione non richiede nuove dipendenze Python,
-reindicizzazione o migrazioni degli indici. Il client deve supportare MCP Apps e inoltrare `_meta` del
-risultato in `ui/notifications/tool-result`. Senza MCP Apps resta solo il riepilogo; se i metadati vengono
-rimossi, la vista HTML mostra un messaggio diagnostico. Le citazioni non hanno un'opzione `also_for_model`
-e non vengono copiate automaticamente in chat. Aprire un file HTML nel browser non verifica questa
-connessione MCP Apps.
-
-**Verifica.** Esegui `python -m unittest discover -s tests -p test_quotes.py` e
-`node tests/test_quotes_view.cjs` per estrazione, metadati e DOM. Gli scenari browser di
-`tests/test_gallery_browser.py` coprono anche le citazioni (servono libreria fittizia, Playwright e Chromium,
-come descritto nel test). Un'anteprima locale riuscita non conferma il supporto in tutti i client MCP.
+L'interfaccia è descritta nel capitolo dedicato: [Mostrare citazioni verbatim nella chat](reading-and-images.md#mostrare-citazioni-verbatim-nella-chat).
 
 ## Variabili d'ambiente
 

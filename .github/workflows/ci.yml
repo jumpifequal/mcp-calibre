@@ -80,3 +80,4 @@ jobs:
           pip install playwright && python -m playwright install --with-deps chromium
           python tests/test_gallery_browser.py
           python tests/test_gallery_copy_save.py
+          python tests/test_gallery_ux.py

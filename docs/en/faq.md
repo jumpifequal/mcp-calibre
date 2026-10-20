@@ -1,6 +1,6 @@
 # FAQ and troubleshooting
 
-[← README](../../README.md) · [Installation](installation.md) · [Tweaking and under the hood](tweaking.md) · [Skills](skills.md) · **FAQ and troubleshooting** · [Performance](performance.md)
+[← README](../../README.md) · [Installation](installation.md) · [Tweaking and under the hood](tweaking.md) · [Reading and images](reading-and-images.md) · [Skills](skills.md) · **FAQ and troubleshooting** · [Performance](performance.md)
 
 🇬🇧 English · [🇮🇹 Italiano](../it/faq.md)
 
