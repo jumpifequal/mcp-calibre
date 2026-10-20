@@ -44,8 +44,9 @@ class _ImgScan(HTMLParser):
         self._fig_items: list[int] = []
         self._in_caption = 0
         self._caption: list[str] = []
-        self._pending: Optional[int] = None   # image waiting for a following caption-like text
-        self._pending_budget = 0
+        # HTMLParser owns _pending in recent Python patch releases.
+        self._caption_image_index: Optional[int] = None
+        self._caption_search_budget = 0
         self._skip = 0
 
     def handle_starttag(self, tag, attrs):
@@ -65,7 +66,7 @@ class _ImgScan(HTMLParser):
             if self._fig_depth:
                 self._fig_items.append(idx)
             else:
-                self._pending, self._pending_budget = idx, 400
+                self._caption_image_index, self._caption_search_budget = idx, 400
 
     def handle_endtag(self, tag):
         if tag in ("script", "style") and self._skip:
@@ -85,14 +86,14 @@ class _ImgScan(HTMLParser):
             self._caption.append(data)
             return
         txt = data.strip()
-        if self._pending is not None and txt:
+        if self._caption_image_index is not None and txt:
             if _CAPTION_RX.match(txt):
-                self.items[self._pending]["caption"] = " ".join(txt.split())[:300]
-                self._pending = None
+                self.items[self._caption_image_index]["caption"] = " ".join(txt.split())[:300]
+                self._caption_image_index = None
             else:
-                self._pending_budget -= len(txt)
-                if self._pending_budget <= 0:
-                    self._pending = None
+                self._caption_search_budget -= len(txt)
+                if self._caption_search_budget <= 0:
+                    self._caption_image_index = None
 
 
 def _zip_bytes(z: zipfile.ZipFile, name: str, limit: int) -> bytes:

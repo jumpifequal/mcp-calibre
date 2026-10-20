@@ -2,6 +2,8 @@
 Usage: python tests/make_fake_library.py && python tests/test_figures.py"""
 import io, os, shutil, sqlite3, struct, sys, tempfile, zipfile, zlib
 from pathlib import Path
+from html.parser import HTMLParser
+from unittest.mock import patch
 sys.argv = ["x"]
 here = Path(__file__).resolve().parent
 sys.path.insert(0, str(here.parent))
@@ -20,6 +22,26 @@ def err(fn, **kw):
         fn(**kw); return None
     except Exception as e:  # noqa: BLE001
         return str(e)
+
+# Recent Python security releases use HTMLParser._pending as an input buffer.
+# Seed that base-class state on older Python too, so a subclass naming collision
+# is caught locally as well as by the latest CI runtimes.
+_parser_init = HTMLParser.__init__
+def _init_with_pending_buffer(self, *args, **kwargs):
+    _parser_init(self, *args, **kwargs)
+    if not hasattr(self, "_pending"):
+        self._pending = []
+    self._test_input_buffer = self._pending
+
+with patch.object(HTMLParser, "__init__", _init_with_pending_buffer):
+    scan = m.figures._ImgScan()
+    check("epub parser: preserves base input buffer on init", scan._pending is scan._test_input_buffer)
+    scan.feed('<img src="one.png"/><p>Figure 1: Following caption</p>')
+    scan.feed('<img src="two.png"/><p>Uncaptioned image</p>')
+    check("epub parser: preserves base input buffer after images", scan._pending is scan._test_input_buffer)
+    scan.close()
+    check("epub parser: following caption retained", scan.items[0]["caption"] == "Figure 1: Following caption")
+    check("epub parser: uncaptioned image retained", scan.items[1]["caption"] is None)
 
 def png(w, h, color=(200, 30, 30)):
     b = io.BytesIO(); PIL.new("RGB", (w, h), color).save(b, "PNG"); return b.getvalue()

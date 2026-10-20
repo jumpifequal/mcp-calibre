@@ -2,6 +2,7 @@
 
 **5.4.1 - In-place reading and gallery UX (2026-10-20)**
 
+- fix: EPUB figure parsing no longer overwrites HTMLParser's internal input buffer introduced in recent Python 3.12/3.13 patch releases, which caused the CI figure tests to fail with `TypeError: can only join an iterable`. Added a regression check that also runs on older Python patches.
 - add: Read buttons on images and quotations; progressive plain-text reading, chapter selection, previous/next windows and font size controls. The app-only `calibre_read_view` preserves library/format selection and sends book text only in view metadata.
 - add: Italian/English view labels, automatic locale selection and manual language switch; chapter and percentage references for quotations, with exact offsets in expandable source details.
 - add: accessible Fit/100% image viewer, double-click, cursor-anchored Ctrl+wheel zoom, panning, backdrop/focus-loss dismissal, export feedback and bounded waits. Preserve the gallery grid and PNG copy/save fallbacks.
