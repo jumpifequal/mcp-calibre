@@ -30,7 +30,7 @@ flowchart LR
   end
   subgraph SV["calibre_mcp.py — server MCP in sola lettura"]
     TR["Trasporti<br/>stdio · Streamable HTTP (bearer, controlli Host/Origin, TLS)"]
-    RG["Superficie MCP<br/>30 tool · 4 resources · 5 prompts · galleria UI<br/>libreria scelta per singola chiamata"]
+    RG["Superficie MCP<br/>31 tool · 4 resources · 5 prompts · galleria UI<br/>libreria scelta per singola chiamata"]
     QM["Metadati e curation<br/>query.py · quality.py · isbn.py"]
     TX["Accesso al testo<br/>catena di estrazione · OCR · structure.py · htmlmd.py · ocr.py"]
     SE["Ricerca<br/>FTS5 · highlight.py · semantic.py"]
@@ -90,7 +90,7 @@ propria cache sidecar.
 | `mcpcalibre/figindex.py` | Indice delle didascalie su tutta la libreria per la ricerca delle figure |
 | `mcpcalibre/ocr.py` | OCR con Tesseract: scelta delle pagine e della lingua, download dei file di lingua |
 | `mcpcalibre/legalgate.py` | Controlli di sovrapposizione, citazioni, compressione, titoli e attribuzione per gli appunti derivati |
-| `mcpcalibre/ui/gallery.html` | Vista MCP Apps: galleria di immagini in linea con Copy/Save PNG |
+| `mcpcalibre/ui/gallery.html` | Vista HTML MCP Apps condivisa: copertine/figure con Copy/Save PNG e citazioni verbatim con attribuzione |
 
 ### Archivi di dati
 
@@ -203,6 +203,7 @@ Tutti i tool sono in sola lettura e accettano un argomento opzionale `library` q
 | `calibre_get_toc` | Indice EPUB (nav/NCX → indici di sezione) o outline PDF + numero di pagine |
 | `calibre_read_section` | Un capitolo EPUB o un intervallo di pagine PDF; `output="markdown"` mantiene heading, liste, tabelle, codice; i segnaposto delle immagini riportano l'id della figura (`[image s3-2: alt]`) |
 | `calibre_show_images` | **Mostra** copertine e figure all'utente in linea nella chat (galleria MCP Apps), con pulsanti Copy PNG / Save PNG; i dati delle immagini non entrano mai nel contesto del modello |
+| `calibre_show_quotes` | Mostra il testo estratto verbatim nella vista HTML, con attribuzione e offset. Accetta `passages` con `book_id`, `format`, `offset`, `max_chars` (1–6000, default 1000); massimo 12 passaggi. Testo solo in `_meta` della vista; alla chat arrivano i riferimenti. Richiede MCP Apps e inoltro dei metadati del risultato. |
 | `calibre_list_figures` | Figure di un libro come elenco testuale e leggero: id, didascalia o testo alternativo, capitolo o pagina, dimensioni. EPUB, PDF, e gli altri formati tramite una conversione EPUB in cache |
 | `calibre_get_figure` | Una figura come immagine, ridimensionata; gli SVG vengono rasterizzati |
 | `calibre_render_page` | Una pagina PDF, o una sua area, come immagine: per diagrammi vettoriali, tabelle, formule |
@@ -495,6 +496,66 @@ Claude Desktop per Windows; il fallback copre anche quel caso.
 come HTML; vengono visualizzati solo dati PNG e JPEG (SVG e qualunque altro formato vengono scartati); la
 galleria accetta messaggi solo dal riquadro padre e non carica nulla dall'esterno. Queste proprietà sono
 verificate in un browser reale (`tests/test_gallery_browser.py`, `tests/test_gallery_copy_save.py`), con didascalie e payload ostili.
+
+## Mostrare citazioni verbatim nella chat
+
+`calibre_show_quotes` usa la stessa vista HTML isolata della galleria di immagini. Nei client con
+supporto MCP Apps il passaggio compare inline nella conversazione, anziché come Markdown nel messaggio
+dell'assistente o collegamento a un file HTML separato. Il server non scrive un file HTML per ogni citazione.
+
+Trova il passaggio con `calibre_find_in_book`, `calibre_search_fulltext` o `calibre_search_semantic`, poi
+passa il riferimento usando **lo stesso formato** del risultato della ricerca:
+
+```json
+{
+  "passages": [{"book_id": 1168, "format": "EPUB", "offset": 1200, "max_chars": 424}],
+  "title": "Passaggio selezionato",
+  "library": "La mia libreria"
+}
+```
+
+`title` e `library` sono facoltativi; ometti `library` per usare la libreria principale. ID e offset sono
+esemplificativi: usa quelli restituiti dalla tua libreria. L'offset di ricerca identifica una corrispondenza,
+non necessariamente l'inizio di una frase; scegli l'inizio e il numero di caratteri del passaggio desiderato.
+Non inviare un campo `text`: il server legge la fonte e rifiuta i campi aggiuntivi nei riferimenti.
+
+| Parametro | Significato |
+|---|---|
+| `passages` | 1–12 riferimenti; possono indicare libri diversi nella libreria selezionata |
+| `book_id` | ID Calibre positivo, obbligatorio |
+| `format` | Formato facoltativo; usa quello associato all'offset per evitare di selezionare un testo diverso |
+| `offset` | Posizione del carattere nel testo estratto, a partire da zero; default `0` |
+| `max_chars` | 1–6000 caratteri, default `1000`; limitato anche da `CALIBRE_MCP_MAX_CHARS` e dalla fine del testo |
+| `title` | Titolo facoltativo della vista, massimo 200 caratteri |
+| `library` | Nome facoltativo della libreria, da `calibre_list_libraries` |
+
+**Esattezza e riferimenti.** Il testo viene prelevato direttamente dalla fonte estratta senza tagliare
+parole, normalizzare spazi o aggiungere virgolette. La vista mostra titolo, autori, formato e
+`[offset, end_offset)`; `end_offset` è escluso. Sono posizioni di caratteri, non numeri di pagina o indici
+di sezioni EPUB. L'estrazione o l'OCR possono differire dalla tipografia originale. Una nuova estrazione,
+la sostituzione del libro o il cambio di formato possono spostare gli offset: ripeti la ricerca anziché
+riutilizzare un riferimento vecchio. Libro mancante, testo non disponibile o offset fuori intervallo fanno
+fallire l'intera chiamata; non viene restituita una lista parziale di citazioni.
+
+**Cosa arriva al modello.** Testo e attribuzione viaggiano in `_meta.calibreQuotes` del risultato,
+destinato alla vista. `content` contiene un breve riepilogo; `structuredContent` contiene soltanto `count`
+e riferimenti (`book_id`, `format`, `offset`, `end_offset`). Titoli, autori e passaggi vengono inseriti come
+testo, mai come HTML eseguibile. Il client riceve comunque il testo per visualizzarlo: è una separazione
+fra vista e modello, non una garanzia su log o archiviazione del client. Le ricerche e letture precedenti
+potrebbero avere già restituito il passaggio al modello; questo tool non lo rimuove dalla cronologia.
+
+**Aggiornamento e supporto del client.** Dopo l'aggiornamento riavvia il server e riconnetti il client
+o aggiorna il suo elenco di tool MCP. Questa funzione non richiede nuove dipendenze Python,
+reindicizzazione o migrazioni degli indici. Il client deve supportare MCP Apps e inoltrare `_meta` del
+risultato in `ui/notifications/tool-result`. Senza MCP Apps resta solo il riepilogo; se i metadati vengono
+rimossi, la vista HTML mostra un messaggio diagnostico. Le citazioni non hanno un'opzione `also_for_model`
+e non vengono copiate automaticamente in chat. Aprire un file HTML nel browser non verifica questa
+connessione MCP Apps.
+
+**Verifica.** Esegui `python -m unittest discover -s tests -p test_quotes.py` e
+`node tests/test_quotes_view.cjs` per estrazione, metadati e DOM. Gli scenari browser di
+`tests/test_gallery_browser.py` coprono anche le citazioni (servono libreria fittizia, Playwright e Chromium,
+come descritto nel test). Un'anteprima locale riuscita non conferma il supporto in tutti i client MCP.
 
 ## Variabili d'ambiente
 

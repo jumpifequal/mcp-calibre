@@ -386,6 +386,13 @@ prima il [changelog](../../CHANGELOG.md): quando cambia il formato dell'indice s
 esegui una volta `--build-embeddings`; fino ad allora la ricerca semantica lo dice invece di restituire risultati
 obsoleti.
 
+**Dopo l'aggiornamento alla 5.4.0.** Arresta e riavvia un server HTTP (anche quello avviato dalla console);
+per stdio, riconnetti il client affinché avvii un nuovo processo. Aggiorna il suo elenco di tool MCP per
+scoprire `calibre_show_quotes`. Controlla `server_version` in `calibre_library_status` per confermare che
+il client usi l'installazione aggiornata. La funzione delle citazioni non richiede nuovi pacchetti Python
+o ricostruzioni degli indici, ma la vista inline richiede MCP Apps e l'inoltro dei metadati del risultato.
+Vedi [Citazioni verbatim](tweaking.md#mostrare-citazioni-verbatim-nella-chat).
+
 **Disinstallazione.** Nulla di tutto questo tocca la tua libreria Calibre, e tutto ciò che il server ha creato si
 può rimuovere:
 

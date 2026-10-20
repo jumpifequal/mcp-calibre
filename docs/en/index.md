@@ -14,6 +14,7 @@ The [README](../../README.md) introduces mcp-calibre. Everything deeper lives in
 | run a command-line job | [Command line](tweaking.md#command-line) |
 | understand how it works | [Architecture](tweaking.md#architecture) |
 | see every tool | [Tools](tweaking.md#tools) |
+| show verbatim passages inline | [Quotations in the chat](tweaking.md#showing-verbatim-quotations-in-the-chat) |
 | use the skills | [Skills](skills.md) |
 | run two books against each other | [Book against book](skills.md#book-against-book-a-step-by-step-recipe) |
 | fix a problem | [FAQ and troubleshooting](faq.md) |

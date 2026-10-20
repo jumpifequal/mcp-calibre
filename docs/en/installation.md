@@ -381,6 +381,13 @@ so nothing is rebuilt needlessly. Read the [changelog](../../CHANGELOG.md) first
 changes (for example from 4.x), run `--build-embeddings` once; until then semantic search says so instead of
 returning stale results.
 
+**After updating to 5.4.0.** Stop and restart an HTTP server (including one launched by the console);
+for stdio, reconnect the client so it launches a fresh process. Refresh its MCP tool list to discover
+`calibre_show_quotes`. Check `server_version` in `calibre_library_status` to confirm the client uses
+the updated installation. The quotation feature needs no new Python package or index rebuild, but its
+inline view requires MCP Apps support and result metadata forwarding. See
+[Verbatim quotations](tweaking.md#showing-verbatim-quotations-in-the-chat).
+
 **Uninstalling.** Nothing here touches your Calibre library, and everything the server created can be removed:
 
 1. Remove the `mcpServers.calibre` entry from `claude_desktop_config.json` (the `.bak-<timestamp>` copies are the

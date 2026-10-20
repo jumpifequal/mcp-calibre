@@ -80,7 +80,31 @@ with sync_playwright() as p:
     check("host theme applied", fr.locator("html").get_attribute("data-theme") == "dark")
     check("size reported to host", size and size["height"] > 100, size)
     check("no console errors / CSP violations", not errors, errors[:3])
-    pass
+    # The shared view receives quotation text in result _meta, never structuredContent.
+    quote_text = '<script>window.__quote_xss = 1</script>\nA fictional passage, with  exact spacing.'
+    quote_result = {"structuredContent": {"count": 1, "references": [{"book_id": 1}]},
+                    "_meta": {"calibreQuotes": {"title": "Quotes", "passages": [{
+                        "book_id": 1, "format": "EPUB", "offset": 0, "end_offset": len(quote_text),
+                        "label": "<b>Book title</b>", "authors": ["A fictional author"], "text": quote_text}]}}}
+    def deliver(result):
+        pg.evaluate("""r => document.getElementById('v').contentWindow.postMessage(
+            {jsonrpc:'2.0', method:'ui/notifications/tool-result', params:r}, '*')""", result)
+    deliver(quote_result)
+    fr.locator("blockquote").wait_for()
+    check("quotes: view metadata renders exact text", fr.locator("blockquote").text_content() == quote_text)
+    check("quotes: no executable markup", fr.locator("blockquote script").count() == 0
+          and fr.locator("html").evaluate("() => window.__quote_xss || null") is None)
+    check("quotes: attribution is text", fr.locator("figcaption .t").text_content() == "<b>Book title</b>"
+          and "A fictional author" in fr.locator("figcaption").text_content())
+    check("quotes: reuses frame without images", fr.locator("figure img").count() == 0)
+    deliver({"structuredContent": quote_result["structuredContent"]})
+    fr.locator("#msg").filter(has_text="did not forward quotation view metadata").wait_for()
+    check("quotes: stripped metadata has an explicit message", fr.locator("blockquote").count() == 0)
+    deliver({"structuredContent": sc})
+    fr.locator("figure img").first.wait_for()
+    check("quotes: image view still works after quotations", fr.locator("figure img").count() == 2
+          and fr.locator("#title").text_content() == "Covers")
+    check("quotes: no console errors / CSP violations", not errors, errors[:3])
     b.close()
     print(f"\n{len(FAILS)} failure(s)" + (": " + ", ".join(FAILS) if FAILS else ""))
     sys.exit(1 if FAILS else 0)

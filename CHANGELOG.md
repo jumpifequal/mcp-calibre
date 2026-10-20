@@ -1,5 +1,14 @@
 # Changelog
 
+**5.4.0 - Verbatim quotations in the chat's HTML view (2026-10-20)**
+
+- add: `calibre_show_quotes` — extracts passages directly from a selected library and displays them in the same inline MCP Apps HTML view as covers and figures, with title, authors, format and exact character range.
+- add: quotation text travels only in result `_meta.calibreQuotes`; model-facing `content` and `structuredContent` contain a summary and source references. The server accepts references, not copied quote text, and does not create HTML files or automatically repeat passages in chat when a client lacks view support.
+- fix: quotation ranges preserve the requested final word, punctuation, line breaks and whitespace without the word-boundary trimming used by `calibre_read_text`. Up to 12 passages, 6000 characters each, also bounded by `CALIBRE_MCP_MAX_CHARS` and the end of the source text; invalid references fail the call.
+- change: shared HTML view 1.1.0 renders quotations as plain text, clears stale headings and zoom when switching views, and explains when a client strips quotation metadata.
+- add: regression tests for extraction, limits, multiple libraries, MCP registration/validation and metadata isolation; DOM tests and browser coverage for quote rendering, hostile markup, missing metadata and switching back to images. Quotation checks are included in CI.
+- docs: English and Italian tool reference, usage examples, offset and extraction semantics, privacy boundary, restart/reconnect instructions and troubleshooting. No dependency or index migration is required.
+
 **5.3.2 - Fixing su embeddings**
 
 * fix: increased embeddings cap to 8000 (variable CALIBRE_MCP_EMBED_MAX_CHUNKS), so longer books are correctly managed via internal language model

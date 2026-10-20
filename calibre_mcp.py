@@ -97,7 +97,7 @@ except ImportError:  # SDK v1
     from mcp.server.fastmcp.exceptions import ToolError  # type: ignore
 from mcp.types import CallToolResult, ImageContent, TextContent, ToolAnnotations
 
-__version__ = "5.3.2"
+__version__ = "5.4.0"
 
 # --------------------------------------------------------------------------- config
 FORMAT_PREF = ["EPUB", "KEPUB", "AZW3", "AZW", "MOBI", "FB2", "DOCX", "HTMLZ",
@@ -1309,8 +1309,10 @@ INSTRUCTIONS = (
     "multilingual; pass the English translation in alt_queries for extra recall. Figures: "
     "calibre_list_figures, then calibre_get_figure or calibre_render_page (PDF vector diagrams). "
     "To SHOW covers or figures to the user, call calibre_show_images: it renders them inline in the "
-    "chat (not in the folded tool call) and costs no model tokens. Chapters of any format: "
-    "calibre_get_chapters. Before sharing notes derived from books, run calibre_check_overlap."
+    "chat (not in the folded tool call) and costs no model tokens. "
+    "calibre_show_quotes displays verbatim passages in the HTML view; quote text stays in view-only "
+    "metadata, not in the chat response. Pass book_id, format, offset and max_chars, not quote text. "
+    "Chapters of any format: calibre_get_chapters. Before sharing notes derived from books, run calibre_check_overlap."
 )
 
 mcp = _Server("calibre_mcp", instructions=INSTRUCTIONS)
@@ -1774,7 +1776,7 @@ GALLERY_META = {"ui": {"permissions": {"clipboardWrite": {}}, "prefersBorder": F
 
 
 @mcp.resource(GALLERY_URI, name="calibre_gallery", mime_type=GALLERY_MIME, meta=GALLERY_META,
-              description="Inline gallery that shows Calibre covers and figures to the user")
+              description="Inline HTML view for Calibre covers, figures and verbatim quotations")
 def resource_gallery() -> str:
     return (Path(__file__).resolve().parent / "mcpcalibre" / "ui" / "gallery.html").read_text("utf-8")
 
@@ -1834,6 +1836,53 @@ def calibre_show_images(
                   "lacks MCP Apps support: retry with also_for_model=true and describe them."))
     return CallToolResult(content=[TextContent(type="text", text=summary), *model_imgs],
                           structuredContent={"title": title, "images": items, "errors": errors})
+
+
+class QuoteRef(BaseModel):
+    model_config = {"extra": "forbid"}
+
+    book_id: Annotated[int, Field(ge=1)]
+    offset: Annotated[int, Field(ge=0, description="Character offset from a search result or calibre_read_text")] = 0
+    max_chars: Annotated[int, Field(ge=1, le=6000, description=(
+        "Exact character count, capped by CALIBRE_MCP_MAX_CHARS and the end of the extracted text"))] = 1000
+    format: Annotated[Optional[str], Field(description="Use the same format as the search result's offset")] = None
+
+
+@tool("calibre_show_quotes", meta={"ui": {"resourceUri": GALLERY_URI}, "ui/resourceUri": GALLERY_URI})
+def calibre_show_quotes(
+    passages: Annotated[list[QuoteRef], Field(min_length=1, max_length=SHOW_MAX_ITEMS,
+        description="Source references to display; supply book_id, format, offset and max_chars, never text")],
+    title: Annotated[Optional[str], Field(max_length=200, description="Optional heading for the quotation view")] = None,
+) -> CallToolResult:
+    """Show verbatim book passages inline in the chat's separate HTML MCP Apps view. Supply source references,
+    never copied text. Text is extracted directly from the library (verbatim relative to extracted
+    plain text, not original book typography) and sent ONLY in view metadata, not model content or
+    structuredContent. Clients without MCP Apps support cannot show these passages; do not fall
+    back to copying them into chat. Offsets refer to the selected format's extracted text, not pages.
+    end_offset is exclusive. No word-boundary trimming or whitespace normalization is applied.
+    """
+    items, refs = [], []
+    for ref in passages:
+        books = LIB.describe([ref.book_id])
+        if not books:
+            raise ValueError(f"Book {ref.book_id} not found")
+        b = books[0]
+        text, fmt, _ = LIB.text_for(ref.book_id, ref.format)
+        if ref.offset >= len(text):
+            raise ValueError(f"offset beyond end of text ({len(text)} chars)")
+        passage = text[ref.offset:ref.offset + min(ref.max_chars, MAX_CHARS)]
+        source = {"book_id": ref.book_id, "format": fmt,
+                  "offset": ref.offset, "end_offset": ref.offset + len(passage)}
+        refs.append(source)
+        items.append({**source, "label": b.get("title") or f"Book {ref.book_id}",
+                      "authors": b.get("authors") or [], "text": passage})
+    return CallToolResult(
+        content=[TextContent(type="text", text=(
+            f"Prepared {len(items)} verbatim passage(s) for the external HTML view. "
+            "Passage text is available only to the view; displaying it requires MCP Apps support."))],
+        structuredContent={"count": len(refs), "references": refs},
+        _meta={"calibreQuotes": {"title": title, "passages": items}},
+    )
 
 
 _CHAPTER_CACHE: dict[tuple, dict] = {}

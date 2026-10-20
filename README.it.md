@@ -51,13 +51,24 @@ verifica che gli appunti scritti a partire dai libri non li copino.
 | Trovare dove se ne parla | "quali libri spiegano la prompt injection?" | `calibre_search_fulltext`, `calibre_search_semantic` |
 | Leggere | "leggi il capitolo 3 di 1168", "mostrami l'indice" | `calibre_get_chapters`, `calibre_read_text(chapter=…)`, `calibre_read_section` |
 | Vedere immagini | "mostrami le copertine di 1168 e 1164", "trova un diagramma del ciclo dell'agente" | `calibre_show_images`, `calibre_search_figures`, `calibre_list_figures` |
+| Vedere citazioni esatte | "mostra quel passaggio in chat come una copertina, con la fonte" | `calibre_show_quotes` (vista HTML MCP Apps) |
 | Riordinare la libreria | "cosa c'è che non va nei miei metadati?", "523 e 906 sono lo stesso libro?" | `calibre_quality_report`, `calibre_find_duplicates`, `calibre_compare_books`, `calibre_find_isbn` |
 | Imparare dai libri | "distilla 1168 in una skill", "sintetizza l'affidabilità degli agenti da 1164, 1168 e 1162" | skill `calibre-distill` / `calibre-distill-topic`, `calibre_check_overlap` |
 | Applicare il metodo di un libro | "trasforma il metodo di 1168, un libro di management, in una skill da usare con il mio team" | skill `calibre-distill`, `calibre_check_overlap` |
 | Far lavorare due libri | "trasforma 1168 e 1164 in due agenti e lasciali discutere (o collaborare) su come salvare un progetto in ritardo" | due agenti `calibre-book-agent` ([come](docs/it/skills.md#libro-contro-libro-ricetta-passo-per-passo)) |
 | Mettere alla prova un libro | "1168 regge? verifica le sue affermazioni contro il resto della mia libreria" | skill `calibre-book-redteam`, `calibre_search_semantic` |
 
-In tutto: **30 tool**, 4 resource e 5 prompt, tutti in sola lettura. L'elenco completo è nel
+Le citazioni verbatim si possono mostrare nella vista HTML con `calibre_show_quotes`, passando
+`passages: [{book_id: 1168, format: "EPUB", offset: 1200, max_chars: 500}]`.
+Il server estrae il testo dal libro e lo invia solo nei metadati `_meta` della vista MCP Apps;
+la risposta della chat contiene soltanto i riferimenti. La vista mostra titolo, autori, formato e
+intervallo di caratteri nel testo estratto (non numeri di pagina). Serve un client che inoltri `_meta`
+alla vista; senza questo supporto il passaggio non viene visualizzato né riportato automaticamente in chat.
+Dopo l'aggiornamento alla **5.4.0**, riavvia il server e aggiorna la connessione MCP del client per scoprire
+il nuovo tool. Vedi [Citazioni verbatim](docs/it/tweaking.md#mostrare-citazioni-verbatim-nella-chat) per limiti,
+intervalli esatti di caratteri e risoluzione dei problemi.
+
+In tutto: **31 tool**, 4 resource e 5 prompt, tutti in sola lettura. L'elenco completo è nel
 [riferimento dei tool](docs/it/tweaking.md#tool).
 
 ## I libri che lavorano per te

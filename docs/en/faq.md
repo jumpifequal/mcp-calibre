@@ -34,6 +34,10 @@ No. Read-only connections never conflict with Calibre's locks, so the server wor
 
 The server runs on your machine and has no network access at query time (the embedding model is downloaded once during setup; building the semantic index and every semantic query run locally). But what a tool returns goes to your AI client: the snippets, chapters and metadata the assistant asks for reach the AI service you chose, as with any MCP server. Images shown with `calibre_show_images` go to the chat view, not into the model's context.
 
+`calibre_show_quotes` sends passage text only in view metadata, not in the model-facing result fields.
+The client still receives the text to render it; its logging and storage policies apply. Search and read
+tools may already have returned the same text to the model. See [quotation data flow](tweaking.md#showing-verbatim-quotations-in-the-chat).
+
 ### Which languages work?
 
 Metadata and full-text search are lexical: the query must be in the language of the books (an Italian query does not match English text), so the assistant is told to translate it, or to combine the translations. Semantic search is multilingual: an Italian question also finds English passages. Stemming is English-only. OCR uses `ita` and `eng` by default; add others with `--download-ocr-langs`.
@@ -138,6 +142,23 @@ Full-text search is lexical, so the query must use the language of the books. As
 ### Images do not appear in the chat
 
 `calibre_show_images` uses the MCP Apps extension, supported by Claude (web and desktop) and ChatGPT, among others. A client without it shows only the text summary, which tells the model to retry with `also_for_model=true` (small thumbnails for the model, inside the tool block). Rendering issues have been reported on some Claude Desktop for Windows builds; the fallback covers them too. See [Showing images in the chat](tweaking.md#showing-images-in-the-chat).
+
+### The quotation tool is missing or its passage does not appear
+
+`calibre_show_quotes` is available from **5.4.0**. Restart the server using the updated checkout and
+refresh the client's MCP connection/tool list; an already-running process still uses the old code.
+Check `server_version` in `calibre_library_status` if the client launches a different installation.
+The server uses an inline MCP Apps view, not an HTML-file link. The client must forward result `_meta`
+to that view. If it only shows a summary or a missing-metadata message, check the client's MCP Apps support.
+Quotation text is not automatically repeated in the assistant's message. Opening a local preview file
+does not verify the client connection. See [Verbatim quotations](tweaking.md#showing-verbatim-quotations-in-the-chat).
+
+### Why do quotation offsets or text differ from the printed page?
+
+Offsets count characters in the selected format's extracted plain text, starting at zero. The end offset
+is exclusive. Reuse the search result's format; switching between EPUB/PDF, replacing the book or rebuilding
+extracted text can change positions. OCR and extraction may change typography. The quote tool preserves the
+extracted characters exactly and applies the per-passage character limit; it does not restore page layout.
 
 ### The first semantic query after starting is slower
 

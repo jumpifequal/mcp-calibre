@@ -14,6 +14,7 @@ Il [README](../../README.it.md) presenta mcp-calibre. Tutto ciò che va più a f
 | eseguire un lavoro da riga di comando | [Riga di comando](tweaking.md#riga-di-comando) |
 | capire come funziona | [Architettura](tweaking.md#architettura) |
 | vedere tutti i tool | [Tool](tweaking.md#tool) |
+| mostrare passaggi verbatim inline | [Citazioni nella chat](tweaking.md#mostrare-citazioni-verbatim-nella-chat) |
 | usare le skill | [Skill](skills.md) |
 | far confrontare due libri | [Libro contro libro](skills.md#libro-contro-libro-ricetta-passo-per-passo) |
 | risolvere un problema | [FAQ e risoluzione dei problemi](faq.md) |

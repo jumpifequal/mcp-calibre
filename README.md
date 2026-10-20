@@ -46,13 +46,24 @@ scanned PDFs, library cleanup, and a check that notes written from books do not 
 | Find where something is discussed | "which books explain prompt injection?" | `calibre_search_fulltext`, `calibre_search_semantic` |
 | Read | "read chapter 3 of 1168", "show the table of contents" | `calibre_get_chapters`, `calibre_read_text(chapter=…)`, `calibre_read_section` |
 | See images | "show me the covers of 1168 and 1164", "find a diagram of the agent loop" | `calibre_show_images`, `calibre_search_figures`, `calibre_list_figures` |
+| See exact quotations | "show that passage in the chat like a cover, with its source" | `calibre_show_quotes` (MCP Apps HTML view) |
 | Clean up the library | "what's wrong with my metadata?", "are 523 and 906 the same book?" | `calibre_quality_report`, `calibre_find_duplicates`, `calibre_compare_books`, `calibre_find_isbn` |
 | Learn from books | "distill 1168 into a skill", "synthesize agent reliability from 1164, 1168 and 1162" | skills `calibre-distill` / `calibre-distill-topic`, `calibre_check_overlap` |
 | Apply a book's method | "turn the method of 1168, a management book, into a skill I can use with my team" | skill `calibre-distill`, `calibre_check_overlap` |
 | Put two books to work | "make an agent out of each of 1168 and 1164 and let them debate (or collaborate on) how to rescue a late project" | two `calibre-book-agent` agents ([how](docs/en/skills.md#book-against-book-a-step-by-step-recipe)) |
 | Stress-test a book | "does 1168 hold up? check its claims against the rest of my library" | skill `calibre-book-redteam`, `calibre_search_semantic` |
 
-In total: **30 tools**, 4 resources and 5 prompts, all read-only. The full list is in the
+Display verbatim quotations in the HTML view with `calibre_show_quotes`, passing
+`passages: [{book_id: 1168, format: "EPUB", offset: 1200, max_chars: 500}]`.
+The server extracts the passage from the book and sends it only in MCP Apps view metadata (`_meta`);
+the chat response contains references only. The view shows the title, authors, format and character
+range in extracted text (not page numbers). The client must forward `_meta` to the view;
+without this support, passages are neither displayed nor automatically copied into chat.
+After upgrading to **5.4.0**, restart the server and refresh the client's MCP connection to discover the
+new tool. See [Verbatim quotations](docs/en/tweaking.md#showing-verbatim-quotations-in-the-chat) for limits,
+exact character ranges and troubleshooting.
+
+In total: **31 tools**, 4 resources and 5 prompts, all read-only. The full list is in the
 [tools reference](docs/en/tweaking.md#tools).
 
 ## Books that work for you

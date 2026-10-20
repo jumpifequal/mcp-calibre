@@ -29,7 +29,7 @@ flowchart LR
   end
   subgraph SV["calibre_mcp.py — read-only MCP server"]
     TR["Transports<br/>stdio · Streamable HTTP (bearer, Host/Origin checks, TLS)"]
-    RG["MCP surface<br/>30 tools · 4 resources · 5 prompts · gallery UI<br/>per-call library selection"]
+    RG["MCP surface<br/>31 tools · 4 resources · 5 prompts · gallery UI<br/>per-call library selection"]
     QM["Metadata & curation<br/>query.py · quality.py · isbn.py"]
     TX["Text access<br/>extraction chain · OCR · structure.py · htmlmd.py · ocr.py"]
     SE["Search<br/>FTS5 · highlight.py · semantic.py"]
@@ -89,7 +89,7 @@ sidecar cache.
 | `mcpcalibre/figindex.py` | Library-wide caption index for figure search |
 | `mcpcalibre/ocr.py` | Tesseract OCR: page selection, language choice, language-file download |
 | `mcpcalibre/legalgate.py` | Overlap, quote, compression, heading and attribution checks for derived notes |
-| `mcpcalibre/ui/gallery.html` | MCP Apps view: inline image gallery with Copy/Save PNG |
+| `mcpcalibre/ui/gallery.html` | Shared MCP Apps HTML view: covers/figures with Copy/Save PNG and verbatim quotations with attribution |
 
 ### Data stores
 
@@ -201,6 +201,7 @@ All tools are read-only and accept an optional `library` argument when several l
 | `calibre_get_toc` | EPUB TOC (nav/NCX → section indices) or PDF outline + page count |
 | `calibre_read_section` | One EPUB chapter or a PDF page range; `output="markdown"` keeps headings, lists, tables, code; image placeholders carry figure ids (`[image s3-2: alt]`) |
 | `calibre_show_images` | **Shows** covers and figures to the user inline in the chat (MCP Apps gallery), with Copy PNG / Save PNG buttons; image data never enters the model's context |
+| `calibre_show_quotes` | Shows verbatim extracted text in the HTML view, with source attribution and character offsets. Accepts `passages` with `book_id`, `format`, `offset`, `max_chars` (1–6000, default 1000); up to 12 passages. Text is sent only in view `_meta`; chat receives references only. Requires MCP Apps support and forwarding of result metadata. |
 | `calibre_list_figures` | Figures of a book as a cheap text list: id, caption or alt text, chapter or page, size. EPUB, PDF, and other formats via a cached EPUB conversion |
 | `calibre_get_figure` | One figure as an image, resized; SVG rasterised |
 | `calibre_render_page` | A PDF page, or an area of it, as an image: for diagrams drawn as vectors, tables, formulas |
@@ -484,6 +485,64 @@ covers that case too.
 HTML; only PNG and JPEG data are rendered (SVG and anything else is dropped); the gallery accepts messages
 only from its parent frame and loads nothing external. These properties are tested in a real browser
 (`tests/test_gallery_browser.py`, `tests/test_gallery_copy_save.py`), including hostile captions and payloads.
+
+## Showing verbatim quotations in the chat
+
+`calibre_show_quotes` uses the same sandboxed HTML view as the image gallery. The passage appears
+inline in the conversation in clients that support MCP Apps, rather than as Markdown in the assistant's
+message or a link to a separate HTML file. The server does not write an HTML file for each quotation.
+
+Find the passage with `calibre_find_in_book`, `calibre_search_fulltext` or `calibre_search_semantic`, then
+pass its reference using the **same format** as the search result:
+
+```json
+{
+  "passages": [{"book_id": 1168, "format": "EPUB", "offset": 1200, "max_chars": 424}],
+  "title": "Selected passage",
+  "library": "My library"
+}
+```
+
+`title` and `library` are optional; omit `library` to use the primary library. IDs and offsets above
+are illustrative: use those returned by your own library. A search offset identifies a match, not
+necessarily the start of a sentence; choose the start and character count for the passage you want.
+Do not send a `text` field: the server reads the source itself and rejects extra passage fields.
+
+| Parameter | Meaning |
+|---|---|
+| `passages` | 1–12 source references; references can address different books in the selected library |
+| `book_id` | Required positive Calibre book ID |
+| `format` | Optional source format; use the format associated with the offset to avoid selecting a different text |
+| `offset` | Zero-based character offset in extracted plain text; default `0` |
+| `max_chars` | 1–6000 characters, default `1000`; also capped by `CALIBRE_MCP_MAX_CHARS` and the end of the text |
+| `title` | Optional view heading, at most 200 characters |
+| `library` | Optional library name from `calibre_list_libraries` |
+
+**Exactness and references.** Text is sliced directly from the extracted source without trimming words,
+normalizing spaces or adding quotation marks. The view shows title, authors, format and `[offset, end_offset)`;
+`end_offset` is exclusive. These are character positions, not page numbers or EPUB section indices.
+Extraction or OCR can differ from the original typography. Re-extracting, replacing a book or switching
+formats can change offsets: search again rather than reusing an old reference. A missing book, unavailable
+text or out-of-range offset fails the whole call; no partial quotation list is returned.
+
+**What reaches the model.** Passage text and attribution travel in result `_meta.calibreQuotes`, intended
+for the view. `content` contains a short summary; `structuredContent` contains only `count` and references
+(`book_id`, `format`, `offset`, `end_offset`). Titles, authors and passage text are inserted as text rather
+than executable HTML. The client still receives the text to display it; this is a view/model separation,
+not a guarantee about client logging or storage. Earlier search/read calls may already have returned
+passage text to the model. This tool does not remove that text from conversation history.
+
+**Upgrade and client support.** Restart the server after updating and reconnect or refresh the client's
+MCP tool list. No new Python dependency, re-indexing or index migration is needed for this feature.
+The client must support MCP Apps and forward result `_meta` in `ui/notifications/tool-result`.
+Without MCP Apps only the summary is available; if metadata is stripped, the HTML view displays a
+diagnostic message. Quotations have no `also_for_model` option and are not automatically copied into chat.
+Opening an HTML file in a browser does not test this MCP Apps connection.
+
+**Verification.** Run `python -m unittest discover -s tests -p test_quotes.py` and
+`node tests/test_quotes_view.cjs` for extraction, metadata and DOM checks. The browser scenarios in
+`tests/test_gallery_browser.py` also cover quotations (requires the fake library, Playwright and Chromium,
+as described in that test). A passing local preview does not confirm support in every MCP client.
 
 ## Environment variables
 

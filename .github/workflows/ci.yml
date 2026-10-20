@@ -23,6 +23,9 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
       - name: environment
         run: python -c "import sys, sqlite3, platform; print(platform.platform(), sys.version, 'sqlite', sqlite3.sqlite_version)"
       - name: install
@@ -51,6 +54,10 @@ jobs:
         run: python tests/test_snippets.py
       - name: test_figures
         run: python tests/test_figures.py
+      - name: quotations (extraction, MCP metadata and view)
+        run: |
+          python -m unittest discover -s tests -p test_quotes.py
+          node tests/test_quotes_view.cjs
       - name: test_v5
         run: python tests/test_v5.py
       - name: test_index_report

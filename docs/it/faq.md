@@ -35,6 +35,11 @@ No. Le connessioni in sola lettura non entrano mai in conflitto con i lock di Ca
 
 Il server gira sul tuo computer e non ha accesso alla rete al momento delle query (il modello di embedding viene scaricato una volta sola durante l'installazione; costruire l'indice semantico e ogni query semantica avvengono in locale). Ma ciò che un tool restituisce va al tuo client AI: gli snippet, i capitoli e i metadati che l'assistente richiede arrivano al servizio AI che hai scelto, come con qualsiasi server MCP. Le immagini mostrate con `calibre_show_images` vanno alla vista nella chat, non nel contesto del modello.
 
+`calibre_show_quotes` invia il passaggio solo nei metadati della vista, non nei campi del risultato
+destinati al modello. Il client riceve comunque il testo per visualizzarlo: si applicano le sue politiche
+di log e archiviazione. I tool di ricerca e lettura potrebbero avere già restituito lo stesso testo al modello.
+Vedi [flusso dei dati delle citazioni](tweaking.md#mostrare-citazioni-verbatim-nella-chat).
+
 ### Quali lingue funzionano?
 
 La ricerca nei metadati e quella full-text sono lessicali: la query deve essere nella lingua dei libri (una query in italiano non trova testo inglese), quindi all'assistente viene detto di tradurla o di combinare le traduzioni. La ricerca semantica è multilingue: una domanda in italiano trova anche passaggi in inglese. Lo stemming è solo inglese. L'OCR usa di default `ita` ed `eng`; aggiungi altre lingue con `--download-ocr-langs`.
@@ -139,6 +144,23 @@ La ricerca full-text è lessicale, quindi la query deve usare la lingua dei libr
 ### Le immagini non compaiono nella chat
 
 `calibre_show_images` usa l'estensione MCP Apps, supportata tra gli altri da Claude (web e desktop) e ChatGPT. Un client che non la supporta mostra solo il riepilogo testuale, che dice al modello di riprovare con `also_for_model=true` (piccole miniature per il modello, dentro il blocco del tool). Su alcune build di Claude Desktop per Windows sono stati segnalati problemi di rendering; il ripiego copre anche quelli. Vedi [Mostrare le immagini nella chat](tweaking.md#mostrare-le-immagini-nella-chat).
+
+### Il tool delle citazioni non compare o il passaggio non viene mostrato
+
+`calibre_show_quotes` è disponibile dalla **5.4.0**. Riavvia il server dalla copia aggiornata e aggiorna
+la connessione MCP e l'elenco dei tool del client: un processo già avviato continua a usare il vecchio codice.
+Controlla `server_version` in `calibre_library_status` se il client avvia un'altra installazione.
+Il server usa una vista MCP Apps inline, non un collegamento a un file HTML. Il client deve inoltrare `_meta`
+del risultato alla vista. Se compare solo un riepilogo o un messaggio sui metadati mancanti, verifica il
+supporto MCP Apps del client. Il testo non viene ripetuto automaticamente nel messaggio dell'assistente.
+Aprire un'anteprima locale non verifica la connessione del client. Vedi [Citazioni verbatim](tweaking.md#mostrare-citazioni-verbatim-nella-chat).
+
+### Perché gli offset o il testo delle citazioni differiscono dalla pagina stampata?
+
+Gli offset contano i caratteri nel testo estratto del formato selezionato, partendo da zero. L'offset finale
+è escluso. Riutilizza il formato del risultato di ricerca: passare da EPUB a PDF, sostituire il libro o
+ricostruire il testo estratto può spostare le posizioni. OCR ed estrazione possono cambiare la tipografia.
+Il tool conserva esattamente i caratteri estratti e applica il limite per passaggio; non ricostruisce la pagina.
 
 ### La prima query semantica dopo l'avvio è più lenta
 

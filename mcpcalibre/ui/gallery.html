@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Calibre images</title>
+<title>Calibre images and quotations</title>
 <style>
   :root {
     color-scheme: light dark;
@@ -44,6 +44,7 @@
   figcaption { padding: 8px 10px 10px; font-size: 12.5px; line-height: 1.4; overflow-wrap: anywhere; }
   .t { font-weight: 600; }
   .s { color: var(--fg2); margin-top: 2px; }
+  blockquote { margin: 0; padding: 16px; white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.6; }
   .err { color: var(--color-text-danger, #b42318); font-size: 12.5px; margin-top: 10px; }
   .empty { color: var(--fg2); font-size: 13px; padding: 12px 2px; }
   .bar { display: flex; gap: 6px; padding: 0 10px 10px; flex-wrap: wrap; }
@@ -180,7 +181,10 @@
     const msg = document.getElementById("msg");
     grid.textContent = "";
     const imgs = Array.isArray(data && data.images) ? data.images : [];
-    if (data && data.title) { const h = document.getElementById("title"); h.textContent = String(data.title); h.hidden = false; }
+    const h = document.getElementById("title");
+    h.textContent = data && data.title ? String(data.title) : "";
+    h.hidden = !h.textContent;
+    document.getElementById("zoom").classList.remove("on");
     let shown = 0;
     for (const it of imgs) {
       if (!it || !ALLOWED_MIME.has(it.mime) || typeof it.data !== "string" || !/^[A-Za-z0-9+/=]+$/.test(it.data)) continue;
@@ -224,6 +228,35 @@
     reportSize();
   }
 
+  function renderQuotes(data) {
+    const grid = document.getElementById("grid");
+    grid.textContent = "";
+    grid.className = "grid single";
+    document.getElementById("zoom").classList.remove("on");
+    const heading = document.getElementById("title");
+    heading.textContent = data.title || "Book quotations";
+    heading.hidden = false;
+    document.getElementById("errors").hidden = true;
+    const passages = Array.isArray(data.passages) ? data.passages : [];
+    for (const it of passages) {
+      if (!it || typeof it.text !== "string") continue;
+      const fig = el("figure");
+      fig.appendChild(el("blockquote", null, it.text));
+      const cap = el("figcaption");
+      cap.appendChild(el("div", "t", it.label || ""));
+      const authors = Array.isArray(it.authors) ? it.authors.join(", ") : "";
+      cap.appendChild(el("div", "s", authors));
+      cap.appendChild(el("div", "s", "#" + it.book_id + " · " + it.format +
+        " · characters [" + it.offset + ", " + it.end_offset + ") in extracted text"));
+      fig.appendChild(cap);
+      grid.appendChild(fig);
+    }
+    const msg = document.getElementById("msg");
+    msg.textContent = grid.childElementCount ? "" : "No quotations to display.";
+    msg.hidden = grid.childElementCount > 0;
+    reportSize();
+  }
+
   document.getElementById("zoom").addEventListener("click", () => document.getElementById("zoom").classList.remove("on"));
 
   let lastH = 0, lastW = 0, ready = false;   // no notifications before the ui/initialize handshake completes
@@ -249,7 +282,11 @@
     }
     if (m.method === "ui/notifications/tool-result") {
       const r = m.params || {};
-      render(r.structuredContent || {});
+      if (r._meta && r._meta.calibreQuotes) renderQuotes(r._meta.calibreQuotes);
+      else if (r.structuredContent && Array.isArray(r.structuredContent.references)) {
+        renderQuotes({ passages: [] });
+        document.getElementById("msg").textContent = "This client did not forward quotation view metadata. Reconnect with an MCP Apps-compatible client.";
+      } else render(r.structuredContent || {});
     } else if (m.method === "ui/notifications/host-context-changed") {
       applyHostContext(m.params);
     } else if (m.method === "ui/notifications/tool-cancelled") {
@@ -262,7 +299,7 @@
   });
 
   request("ui/initialize", {
-    appInfo: { name: "calibre-mcp-gallery", version: "1.0.0" },
+    appInfo: { name: "calibre-mcp-gallery", version: "1.1.0" },
     appCapabilities: { availableDisplayModes: ["inline"] },
     protocolVersion: PROTOCOL,
   }).then((res) => {
