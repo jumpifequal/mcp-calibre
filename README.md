@@ -4,7 +4,7 @@
 
 🇬🇧 English · [🇮🇹 Italiano](README.it.md)
 
-[![M8ven Score](https://m8ven.ai/badge/mcp/jumpifequal/mcp-calibre)](https://m8ven.ai/mcp/jumpifequal/mcp-calibre?s=readme)
+[![M8ven Score](https://m8ven.ai/badge/mcp/jumpifequal-mcp-calibre-1xmm3y?v=7e9fb20f8c082a956c095a3246f07085)](https://m8ven.ai/mcp/jumpifequal-mcp-calibre-1xmm3y?s=readme)
 
 **Your Calibre library, readable by your AI assistant: private, read-only, fast.**
 
@@ -59,7 +59,7 @@ using the normal search/read tools to turn your library into actionable answers.
 |---|---|---|
 | Find books | "my unread security books published after 2020" | `calibre_search_books` (`query: 'tag:security and not #letto:true and pubdate:>2020'`) |
 | Find where something is discussed | "which books explain prompt injection?" | `calibre_search_fulltext`, `calibre_search_semantic` |
-| Read | "read chapter 3 of 1168", "show the table of contents" | `calibre_get_chapters`, `calibre_read_text(chapter=…)`, `calibre_read_section` |
+| Read | "read chapter 3 of 1168", "show the table of contents" | `calibre_get_chapters`, `calibre_read_text(chapter=�?`, `calibre_read_section` |
 | See images | "show me the covers of 1168 and 1164", "find a diagram of the agent loop" | `calibre_show_images`, `calibre_search_figures`, `calibre_list_figures` |
 | See exact quotations | "show that passage in the chat like a cover, with its source" | `calibre_show_quotes` (MCP Apps HTML view) |
 | Clean up the library | "what's wrong with my metadata?", "are 523 and 906 the same book?" | `calibre_quality_report`, `calibre_find_duplicates`, `calibre_compare_books`, `calibre_find_isbn` |
@@ -128,9 +128,9 @@ benchmark that ships in the repository (`tests/bench_synthetic.py`):
 |---|---|
 | Initial index build, once | 21 s (148 MB index) |
 | Incremental sync after a change | 0.15 s |
-| Metadata search | 3.2–7.8 ms |
-| Full-text search, 10 books × 3 snippets | 25–63 ms |
-| Full-text search, 50 books, no snippets | 2.5–3.0 ms |
+| Metadata search | 3.2�?.8 ms |
+| Full-text search, 10 books × 3 snippets | 25�?3 ms |
+| Full-text search, 50 books, no snippets | 2.5�?.0 ms |
 | Read a 6,000-character window / find in a book | 1.9 ms / 8.3 ms |
 | Chapter map of a book | 1.9 ms |
 | Semantic hybrid search over 60,376 passages* | 75 ms |

@@ -4,7 +4,7 @@
 
 [🇬🇧 English](README.md) · 🇮🇹 Italiano
 
-[![M8ven Score](https://m8ven.ai/badge/mcp/jumpifequal/mcp-calibre)](https://m8ven.ai/mcp/jumpifequal/mcp-calibre?s=readme)
+[![M8ven Score](https://m8ven.ai/badge/mcp/jumpifequal-mcp-calibre-1xmm3y?v=7e9fb20f8c082a956c095a3246f07085)](https://m8ven.ai/mcp/jumpifequal-mcp-calibre-1xmm3y?s=readme)
 
 **La tua libreria Calibre, leggibile dal tuo assistente AI: privata, in sola lettura, veloce.**
 
@@ -64,7 +64,7 @@ ricerca e lettura ordinarie per trasformare la libreria in risposte azionabili.
 |---|---|---|
 | Trovare libri | "i miei libri di sicurezza non letti pubblicati dopo il 2020" | `calibre_search_books` (`query: 'tag:security and not #letto:true and pubdate:>2020'`) |
 | Trovare dove se ne parla | "quali libri spiegano la prompt injection?" | `calibre_search_fulltext`, `calibre_search_semantic` |
-| Leggere | "leggi il capitolo 3 di 1168", "mostrami l'indice" | `calibre_get_chapters`, `calibre_read_text(chapter=…)`, `calibre_read_section` |
+| Leggere | "leggi il capitolo 3 di 1168", "mostrami l'indice" | `calibre_get_chapters`, `calibre_read_text(chapter=�?`, `calibre_read_section` |
 | Vedere immagini | "mostrami le copertine di 1168 e 1164", "trova un diagramma del ciclo dell'agente" | `calibre_show_images`, `calibre_search_figures`, `calibre_list_figures` |
 | Vedere citazioni esatte | "mostra quel passaggio in chat come una copertina, con la fonte" | `calibre_show_quotes` (vista HTML MCP Apps) |
 | Riordinare la libreria | "cosa c'è che non va nei miei metadati?", "523 e 906 sono lo stesso libro?" | `calibre_quality_report`, `calibre_find_duplicates`, `calibre_compare_books`, `calibre_find_isbn` |
@@ -134,9 +134,9 @@ benchmark incluso nel repository (`tests/bench_synthetic.py`):
 |---|---|
 | Costruzione iniziale dell'indice, una tantum | 21 s (148 MB di indice) |
 | Sincronizzazione incrementale dopo una modifica | 0,15 s |
-| Ricerca nei metadati | 3,2–7,8 ms |
-| Ricerca full-text, 10 libri × 3 snippet | 25–63 ms |
-| Ricerca full-text, 50 libri, senza snippet | 2,5–3,0 ms |
+| Ricerca nei metadati | 3,2�?,8 ms |
+| Ricerca full-text, 10 libri × 3 snippet | 25�?3 ms |
+| Ricerca full-text, 50 libri, senza snippet | 2,5�?,0 ms |
 | Leggere una finestra di 6.000 caratteri / cercare in un libro | 1,9 ms / 8,3 ms |
 | Mappa dei capitoli di un libro | 1,9 ms |
 | Ricerca semantica ibrida su 60.376 passaggi* | 75 ms |
