@@ -14,7 +14,7 @@ Calibre's own databases directly (no Calibre process needed, no write access, ev
 needs to really work with a library: full-text search, search by meaning, reading by chapter, images, OCR for
 scanned PDFs, library cleanup, and a check that notes written from books do not copy them.
 
-[Install it](docs/en/installation.md) · [Tweak it and see how it works](docs/en/tweaking.md) · [Reading and images](docs/en/reading-and-images.md) · [Skills](docs/en/skills.md) · [FAQ](docs/en/faq.md) · [Performance](docs/en/performance.md)
+[Install it](docs/en/installation.md) · [Tweak it and see how it works](docs/en/tweaking.md) · [Skills](docs/en/skills.md) · [FAQ](docs/en/faq.md) · [Performance](docs/en/performance.md)
 
 ## Why you will like it
 
@@ -38,28 +38,13 @@ scanned PDFs, library cleanup, and a check that notes written from books do not 
   explains each one.
 - **Fast.** Searches answer in milliseconds on a library of 1,500 books (numbers [below](#performance-at-a-glance)).
 
-## Open a book without leaving the chat
-
-Open a diagram, zoom into the detail, copy it as PNG, or press **Read** to consult the book.
-Choose a chapter, adjust the text size and continue at your own pace. The assistant and skills keep
-using the normal search/read tools to turn your library into actionable answers.
-
-<p align="center">
-<img src="presentation/screenshots/ux-gallery-en.png" alt="Gallery with fictional cover and figures" width="56%">
-<img src="presentation/screenshots/ux-reader-en.png" alt="In-place reader" width="42%">
-</p>
-
-*Real gallery and reader renderings with a fictional book, cover and sample content. MCP Apps support required.*
-
-**[Explore reading, images and quotations](docs/en/reading-and-images.md)**
-
 ## What you can ask
 
 | Goal | Example request | Tools involved |
 |---|---|---|
 | Find books | "my unread security books published after 2020" | `calibre_search_books` (`query: 'tag:security and not #letto:true and pubdate:>2020'`) |
 | Find where something is discussed | "which books explain prompt injection?" | `calibre_search_fulltext`, `calibre_search_semantic` |
-| Read | "read chapter 3 of 1168", "show the table of contents" | `calibre_get_chapters`, `calibre_read_text(chapter=�?`, `calibre_read_section` |
+| Read | "read chapter 3 of 1168", "show the table of contents" | `calibre_get_chapters`, `calibre_read_text(chapter=…)`, `calibre_read_section` |
 | See images | "show me the covers of 1168 and 1164", "find a diagram of the agent loop" | `calibre_show_images`, `calibre_search_figures`, `calibre_list_figures` |
 | See exact quotations | "show that passage in the chat like a cover, with its source" | `calibre_show_quotes` (MCP Apps HTML view) |
 | Clean up the library | "what's wrong with my metadata?", "are 523 and 906 the same book?" | `calibre_quality_report`, `calibre_find_duplicates`, `calibre_compare_books`, `calibre_find_isbn` |
@@ -68,9 +53,17 @@ using the normal search/read tools to turn your library into actionable answers.
 | Put two books to work | "make an agent out of each of 1168 and 1164 and let them debate (or collaborate on) how to rescue a late project" | two `calibre-book-agent` agents ([how](docs/en/skills.md#book-against-book-a-step-by-step-recipe)) |
 | Stress-test a book | "does 1168 hold up? check its claims against the rest of my library" | skill `calibre-book-redteam`, `calibre_search_semantic` |
 
-For direct consultation, use the gallery’s **Read** button or explicitly request a passage display. See [Reading and images](docs/en/reading-and-images.md) for the walkthrough, gestures and client requirements.
+Display verbatim quotations in the HTML view with `calibre_show_quotes`, passing
+`passages: [{book_id: 1168, format: "EPUB", offset: 1200, max_chars: 500}]`.
+The server extracts the passage from the book and sends it only in MCP Apps view metadata (`_meta`);
+the chat response contains references only. The view shows the title, authors, format and character
+range in extracted text (not page numbers). The client must forward `_meta` to the view;
+without this support, passages are neither displayed nor automatically copied into chat.
+After upgrading to **5.4.0**, restart the server and refresh the client's MCP connection to discover the
+new tool. See [Verbatim quotations](docs/en/tweaking.md#showing-verbatim-quotations-in-the-chat) for limits,
+exact character ranges and troubleshooting.
 
-In total: **31 assistant tools plus one internal reader tool**, 4 resources and 5 prompts, all read-only. The full list is in the
+In total: **31 tools**, 4 resources and 5 prompts, all read-only. The full list is in the
 [tools reference](docs/en/tweaking.md#tools).
 
 ## Books that work for you
@@ -128,9 +121,9 @@ benchmark that ships in the repository (`tests/bench_synthetic.py`):
 |---|---|
 | Initial index build, once | 21 s (148 MB index) |
 | Incremental sync after a change | 0.15 s |
-| Metadata search | 3.2�?.8 ms |
-| Full-text search, 10 books × 3 snippets | 25�?3 ms |
-| Full-text search, 50 books, no snippets | 2.5�?.0 ms |
+| Metadata search | 3.2–7.8 ms |
+| Full-text search, 10 books × 3 snippets | 25–63 ms |
+| Full-text search, 50 books, no snippets | 2.5–3.0 ms |
 | Read a 6,000-character window / find in a book | 1.9 ms / 8.3 ms |
 | Chapter map of a book | 1.9 ms |
 | Semantic hybrid search over 60,376 passages* | 75 ms |
@@ -201,7 +194,6 @@ which is not a supported way to expose a personal library.
 |---|---|
 | [Installation](docs/en/installation.md) | install with the setup wizard, the install script or by hand; connect Claude, Codex and ChatGPT; check, update, uninstall |
 | [Tweaking and under the hood](docs/en/tweaking.md) | understand the architecture and data stores, the tools and features in depth, every setting and command-line flag, the console, security |
-| [Reading and images](docs/en/reading-and-images.md) | explore the gallery, zoom and export figures, read in-place and display quotations; client support |
 | [Skills](docs/en/skills.md) | use the four companion skills: distill a book, synthesize a topic, turn a book into an agent, stress-test a book; the legal gate; how to run two books against each other |
 | [FAQ and troubleshooting](docs/en/faq.md) | solve setup and usage problems, and know the limits |
 | [Performance](docs/en/performance.md) | see how speed was measured, the results, sizing and tuning |

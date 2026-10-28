@@ -15,7 +15,7 @@ scrittura) e aggiunge ciò che serve a un assistente per lavorare davvero con un
 ricerca per significato, lettura per capitoli, immagini, OCR dei PDF scansionati, pulizia della libreria e una
 verifica che gli appunti scritti a partire dai libri non li copino.
 
-[Installalo](docs/it/installation.md) · [Personalizzalo e scopri come funziona](docs/it/tweaking.md) · [Lettura e immagini](docs/it/reading-and-images.md) · [Skill](docs/it/skills.md) · [FAQ](docs/it/faq.md) · [Prestazioni](docs/it/performance.md)
+[Installalo](docs/it/installation.md) · [Personalizzalo e scopri come funziona](docs/it/tweaking.md) · [Skill](docs/it/skills.md) · [FAQ](docs/it/faq.md) · [Prestazioni](docs/it/performance.md)
 
 ## Perché ti piacerà
 
@@ -43,28 +43,13 @@ verifica che gli appunti scritti a partire dai libri non li copino.
 - **Veloce.** Le ricerche rispondono in millisecondi su una libreria di 1.500 libri (numeri
   [qui sotto](#prestazioni-in-breve)).
 
-## Apri un libro senza lasciare la chat
-
-Apri un diagramma, ingrandisci il dettaglio, copialo come PNG oppure premi **Leggi** per consultare il libro.
-Scegli un capitolo, regola il testo e prosegui con i tuoi tempi. L'assistente e le skill continuano a usare
-ricerca e lettura ordinarie per trasformare la libreria in risposte azionabili.
-
-<p align="center">
-<img src="presentation/screenshots/ux-gallery-it.png" alt="Galleria con copertina e figure fittizie" width="56%">
-<img src="presentation/screenshots/ux-reader-it.png" alt="Lettore in-place" width="42%">
-</p>
-
-*Rendering reali della galleria e del lettore con libro, copertina e contenuti fittizi. Serve il supporto MCP Apps.*
-
-**[Scopri lettura, immagini e citazioni](docs/it/reading-and-images.md)**
-
 ## Cosa puoi chiedere
 
 | Obiettivo | Esempio di richiesta | Tool coinvolti |
 |---|---|---|
 | Trovare libri | "i miei libri di sicurezza non letti pubblicati dopo il 2020" | `calibre_search_books` (`query: 'tag:security and not #letto:true and pubdate:>2020'`) |
 | Trovare dove se ne parla | "quali libri spiegano la prompt injection?" | `calibre_search_fulltext`, `calibre_search_semantic` |
-| Leggere | "leggi il capitolo 3 di 1168", "mostrami l'indice" | `calibre_get_chapters`, `calibre_read_text(chapter=�?`, `calibre_read_section` |
+| Leggere | "leggi il capitolo 3 di 1168", "mostrami l'indice" | `calibre_get_chapters`, `calibre_read_text(chapter=…)`, `calibre_read_section` |
 | Vedere immagini | "mostrami le copertine di 1168 e 1164", "trova un diagramma del ciclo dell'agente" | `calibre_show_images`, `calibre_search_figures`, `calibre_list_figures` |
 | Vedere citazioni esatte | "mostra quel passaggio in chat come una copertina, con la fonte" | `calibre_show_quotes` (vista HTML MCP Apps) |
 | Riordinare la libreria | "cosa c'è che non va nei miei metadati?", "523 e 906 sono lo stesso libro?" | `calibre_quality_report`, `calibre_find_duplicates`, `calibre_compare_books`, `calibre_find_isbn` |
@@ -73,9 +58,17 @@ ricerca e lettura ordinarie per trasformare la libreria in risposte azionabili.
 | Far lavorare due libri | "trasforma 1168 e 1164 in due agenti e lasciali discutere (o collaborare) su come salvare un progetto in ritardo" | due agenti `calibre-book-agent` ([come](docs/it/skills.md#libro-contro-libro-ricetta-passo-per-passo)) |
 | Mettere alla prova un libro | "1168 regge? verifica le sue affermazioni contro il resto della mia libreria" | skill `calibre-book-redteam`, `calibre_search_semantic` |
 
-Per consultare direttamente i libri usa **Leggi** nella galleria o chiedi esplicitamente di visualizzare un passaggio. Il capitolo [Lettura e immagini](docs/it/reading-and-images.md) spiega percorso, gesture e requisiti del client.
+Le citazioni verbatim si possono mostrare nella vista HTML con `calibre_show_quotes`, passando
+`passages: [{book_id: 1168, format: "EPUB", offset: 1200, max_chars: 500}]`.
+Il server estrae il testo dal libro e lo invia solo nei metadati `_meta` della vista MCP Apps;
+la risposta della chat contiene soltanto i riferimenti. La vista mostra titolo, autori, formato e
+intervallo di caratteri nel testo estratto (non numeri di pagina). Serve un client che inoltri `_meta`
+alla vista; senza questo supporto il passaggio non viene visualizzato né riportato automaticamente in chat.
+Dopo l'aggiornamento alla **5.4.0**, riavvia il server e aggiorna la connessione MCP del client per scoprire
+il nuovo tool. Vedi [Citazioni verbatim](docs/it/tweaking.md#mostrare-citazioni-verbatim-nella-chat) per limiti,
+intervalli esatti di caratteri e risoluzione dei problemi.
 
-In tutto: **31 tool per l'assistente più un tool interno per il lettore**, 4 resource e 5 prompt, tutti in sola lettura. L'elenco completo è nel
+In tutto: **31 tool**, 4 resource e 5 prompt, tutti in sola lettura. L'elenco completo è nel
 [riferimento dei tool](docs/it/tweaking.md#tool).
 
 ## I libri che lavorano per te
@@ -134,9 +127,9 @@ benchmark incluso nel repository (`tests/bench_synthetic.py`):
 |---|---|
 | Costruzione iniziale dell'indice, una tantum | 21 s (148 MB di indice) |
 | Sincronizzazione incrementale dopo una modifica | 0,15 s |
-| Ricerca nei metadati | 3,2�?,8 ms |
-| Ricerca full-text, 10 libri × 3 snippet | 25�?3 ms |
-| Ricerca full-text, 50 libri, senza snippet | 2,5�?,0 ms |
+| Ricerca nei metadati | 3,2–7,8 ms |
+| Ricerca full-text, 10 libri × 3 snippet | 25–63 ms |
+| Ricerca full-text, 50 libri, senza snippet | 2,5–3,0 ms |
 | Leggere una finestra di 6.000 caratteri / cercare in un libro | 1,9 ms / 8,3 ms |
 | Mappa dei capitoli di un libro | 1,9 ms |
 | Ricerca semantica ibrida su 60.376 passaggi* | 75 ms |
@@ -207,7 +200,6 @@ pubblici con OAuth, e non è un modo supportato per esporre una libreria persona
 |---|---|
 | [Installazione](docs/it/installation.md) | installare con la procedura guidata, lo script o a mano; collegare Claude, Codex e ChatGPT; verificare, aggiornare, disinstallare |
 | [Personalizzazione e funzionamento interno](docs/it/tweaking.md) | capire architettura e archivi di dati, tool e funzioni in dettaglio, ogni impostazione e flag da riga di comando, la console, la sicurezza |
-| [Lettura e immagini](docs/it/reading-and-images.md) | usare la galleria, zoomare ed esportare figure, leggere in-place e visualizzare citazioni; supporto dei client |
 | [Skill](docs/it/skills.md) | usare le quattro skill companion: distillare un libro, sintetizzare un argomento, trasformare un libro in agente, mettere alla prova un libro; il legal gate; come far confrontare due libri |
 | [FAQ e risoluzione dei problemi](docs/it/faq.md) | risolvere i problemi di installazione e di uso, e conoscere i limiti |
 | [Prestazioni](docs/it/performance.md) | vedere come è stata misurata la velocità, i risultati, il dimensionamento e la messa a punto |
